@@ -1,0 +1,236 @@
+environment: development
+
+server:
+  host: 127.0.0.1
+  port: 8080
+  trustProxy: false
+  requestBodyLimitBytes: 10485760
+
+auth:
+  enabled: true
+  apiKeys:
+    - local-development-key
+
+database:
+  url: postgresql://vartma:vartma@localhost:5432/vartma?schema=public
+  requiredForReadiness: true
+
+routing:
+  defaultMode: balanced
+  defaultModel: fake/default
+  baselineModel: fake/default
+  routerVersion: deterministic-v1
+  priceBookVersion: public-prices-2026-07-23
+  policies:
+    quality:
+      minimumQualityTier: 2
+      difficultyTierAdjustment: 0
+      qualityWeight: 0.82
+      costWeight: 0.04
+      latencyWeight: 0.08
+      failureWeight: 0.06
+    balanced:
+      minimumQualityTier: 1
+      difficultyTierAdjustment: -1
+      qualityWeight: 0.55
+      costWeight: 0.25
+      latencyWeight: 0.12
+      failureWeight: 0.08
+    eco:
+      minimumQualityTier: 1
+      difficultyTierAdjustment: -1
+      qualityWeight: 0.2
+      costWeight: 0.68
+      latencyWeight: 0.08
+      failureWeight: 0.04
+    fixed:
+      minimumQualityTier: 1
+      difficultyTierAdjustment: -4
+      qualityWeight: 1
+      costWeight: 0
+      latencyWeight: 0
+      failureWeight: 0
+  session:
+    enabled: true
+    switchPenalty: 0.08
+    switchScoreThreshold: 0.06
+    escalationFailureThreshold: 2
+    maxEscalationLevel: 4
+    successfulOutcomesToDeescalate: 3
+    deescalationCooldownMs: 300000
+  fallback:
+    enabled: true
+    maxAttempts: 3
+    maxTotalDurationMs: 60000
+    allowWeakerFallback: true
+  circuitBreaker:
+    failureThreshold: 3
+    openDurationMs: 30000
+    halfOpenSuccessThreshold: 2
+
+providers:
+  - id: fake
+    type: fake
+    enabled: true
+    models:
+      - id: fake/default
+        provider: fake
+        upstreamModel: fake-default
+        enabled: true
+        capabilities:
+          text: true
+          vision: false
+          streaming: true
+          tools: true
+          structuredOutput: true
+          reasoning: false
+        contextWindow: 100000
+        maxOutputTokens: 4096
+        qualityTier: 1
+        expectedLatencyTier: 1
+        pricing:
+          currency: USD
+          effectiveFrom: 2026-07-23
+          verifiedAt: 2026-07-23
+          source: internal deterministic fake provider
+          inputPerMillion: 0
+          cachedInputPerMillion: 0
+          outputPerMillion: 0
+
+  # Phase 2 live adapters. Enable one or both after setting the corresponding key in .env.
+  # Prices below are the public prices on 2026-07-23; review provider pricing before production use.
+  - id: anthropic
+    type: anthropic
+    enabled: false
+    apiKeyEnv: ANTHROPIC_API_KEY
+    requestTimeoutMs: 120000
+    maxRetries: 2
+    models:
+      - id: anthropic/claude-sonnet-5
+        provider: anthropic
+        upstreamModel: claude-sonnet-5
+        enabled: true
+        capabilities:
+          text: true
+          vision: true
+          streaming: true
+          tools: true
+          structuredOutput: true
+          reasoning: true
+        contextWindow: 1000000
+        maxOutputTokens: 128000
+        qualityTier: 4
+        expectedLatencyTier: 3
+        pricing:
+          currency: USD
+          effectiveFrom: 2026-07-23
+          verifiedAt: 2026-07-23
+          source: https://platform.claude.com/docs/en/about-claude/pricing
+          inputPerMillion: 2
+          cachedInputPerMillion: 0.2
+          outputPerMillion: 10
+
+  - id: openai
+    type: openai
+    enabled: false
+    apiKeyEnv: OPENAI_API_KEY
+    requestTimeoutMs: 120000
+    maxRetries: 2
+    models:
+      - id: openai/gpt-5.6-terra
+        provider: openai
+        upstreamModel: gpt-5.6-terra
+        enabled: true
+        capabilities:
+          text: true
+          vision: true
+          streaming: true
+          tools: true
+          structuredOutput: true
+          reasoning: true
+        contextWindow: 1050000
+        maxOutputTokens: 128000
+        qualityTier: 4
+        expectedLatencyTier: 3
+        pricing:
+          currency: USD
+          effectiveFrom: 2026-07-23
+          verifiedAt: 2026-07-23
+          source: https://developers.openai.com/api/docs/models/gpt-5.6-terra
+          inputPerMillion: 2.5
+          cachedInputPerMillion: 0.25
+          outputPerMillion: 15
+
+  - id: gemini
+    type: gemini
+    enabled: false
+    apiKeyEnv: GEMINI_API_KEY
+    requestTimeoutMs: 120000
+    maxRetries: 2
+    models:
+      - id: gemini/gemini-3.6-flash
+        provider: gemini
+        upstreamModel: gemini-3.6-flash
+        enabled: true
+        capabilities:
+          text: true
+          vision: true
+          streaming: true
+          tools: true
+          structuredOutput: true
+          reasoning: true
+        contextWindow: 1000000
+        maxOutputTokens: 64000
+        qualityTier: 4
+        expectedLatencyTier: 2
+        pricing:
+          currency: USD
+          effectiveFrom: 2026-07-21
+          verifiedAt: 2026-07-28
+          source: https://ai.google.dev/gemini-api/docs/pricing
+          inputPerMillion: 1.5
+          cachedInputPerMillion: 0.15
+          outputPerMillion: 7.5
+
+  # A vLLM or other Chat-Completions-compatible endpoint. Change upstreamModel,
+  # capabilities, limits, and prices to the model actually served at baseUrl.
+  - id: local
+    type: openai-compatible
+    enabled: false
+    baseUrl: http://127.0.0.1:8000
+    apiKeyEnv: LOCAL_MODEL_API_KEY
+    requestTimeoutMs: 120000
+    maxRetries: 1
+    models:
+      - id: local/default
+        provider: local
+        upstreamModel: local-model
+        enabled: true
+        capabilities:
+          text: true
+          vision: false
+          streaming: true
+          tools: true
+          structuredOutput: true
+          reasoning: false
+        contextWindow: 131072
+        maxOutputTokens: 16384
+        qualityTier: 2
+        expectedLatencyTier: 2
+        pricing:
+          currency: USD
+          effectiveFrom: 2026-07-28
+          verifiedAt: 2026-07-28
+          source: operator-supplied local inference cost
+          inputPerMillion: 0
+          cachedInputPerMillion: 0
+          outputPerMillion: 0
+
+telemetry:
+  serviceName: vartma-gateway
+  logLevel: info
+  langSmith:
+    enabled: false
+    apiKeyEnv: LANGSMITH_API_KEY
+    project: vartma-development
+    exportContent: false

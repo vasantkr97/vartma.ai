@@ -1,0 +1,20 @@
+{
+  "name": "@vartma/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "vartma": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@vartma/config": "*",
+    "@vartma/database": "*",
+    "@vartma/gateway": "*",
+    "commander": "latest"
+  }
+}

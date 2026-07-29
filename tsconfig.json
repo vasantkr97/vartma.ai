@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/canonical" },
+    { "path": "./packages/config" },
+    { "path": "./packages/providers" },
+    { "path": "./packages/routing" },
+    { "path": "./packages/database" },
+    { "path": "./apps/gateway" },
+    { "path": "./apps/cli" }
+  ]
+}

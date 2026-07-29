@@ -1,0 +1,44 @@
+{
+  "name": "vartma-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "npm run build && vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "dev:gateway": "npm run build && tsx apps/gateway/src/main.ts",
+    "vartma": "npm run build && node apps/cli/dist/index.js",
+    "smoke:claude-code": "npm run build && node scripts/claude-code-smoke.mjs",
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "postinstall": "prisma generate"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "@types/node": "latest",
+    "@types/supertest": "latest",
+    "dotenv": "latest",
+    "eslint": "latest",
+    "openai": "^7.0.0",
+    "prettier": "latest",
+    "prisma": "^7.0.0",
+    "supertest": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "typescript-eslint": "latest",
+    "vitest": "latest"
+  }
+}

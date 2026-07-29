@@ -1,0 +1,34 @@
+{
+  "name": "@vartma/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx src/main.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "latest",
+    "@vartma/canonical": "*",
+    "@vartma/config": "*",
+    "@vartma/database": "*",
+    "@vartma/providers": "*",
+    "@vartma/routing": "*",
+    "express": "latest",
+    "pino": "latest",
+    "pino-http": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/express": "latest"
+  }
+}

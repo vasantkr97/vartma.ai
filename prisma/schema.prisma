@@ -1,0 +1,239 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../packages/database/src/generated/prisma"
+  runtime  = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum RequestStatus {
+  RECEIVED
+  STREAMING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AttemptStatus {
+  STARTED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model Session {
+  id                String   @id
+  clientType        String?
+  routingMode       String
+  currentProvider   String?
+  currentModel      String?
+  escalationLevel   Int      @default(0)
+  turnCount         Int      @default(0)
+  lastTaskClass     String?
+  consecutiveFailures Int    @default(0)
+  successfulOutcomes  Int    @default(0)
+  lastEscalatedAt     DateTime?
+  cooldownUntil       DateTime?
+  accumulatedCost   Decimal  @default(0) @db.Decimal(20, 10)
+  inputTokens        BigInt   @default(0)
+  cachedInputTokens  BigInt   @default(0)
+  outputTokens       BigInt   @default(0)
+  reasoningTokens    BigInt   @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  lastActivityAt    DateTime @default(now())
+
+  requests Request[]
+  outcomes SessionOutcome[]
+
+  @@index([lastActivityAt])
+}
+
+model Request {
+  id               String        @id
+  sessionId        String?
+  session          Session?      @relation(fields: [sessionId], references: [id])
+  clientRequestId  String?
+  requestedModel   String?
+  selectedProvider String?
+  selectedModel    String?
+  routingMode      String
+  status           RequestStatus @default(RECEIVED)
+  startedAt        DateTime      @default(now())
+  completedAt      DateTime?
+  errorType        String?
+  errorMessage     String?
+  traceLevel       String        @default("metadata_only")
+  metadata         Json?
+
+  attempts      ProviderAttempt[]
+  routeDecision RouteDecision?
+  costBaseline RequestCostBaseline?
+  usageEvents   UsageEvent[]
+  routeSwitches RouteSwitch[]
+
+  @@index([sessionId, startedAt])
+  @@index([status, startedAt])
+}
+
+model RouteSwitch {
+  id           String   @id @default(uuid())
+  requestId    String
+  request      Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sequence     Int
+  fromProvider String
+  fromModel    String
+  toProvider   String
+  toModel      String
+  reason       String
+  trigger      String
+  createdAt    DateTime @default(now())
+
+  @@unique([requestId, sequence])
+  @@index([requestId, createdAt])
+}
+
+model SessionOutcome {
+  id                    String   @id @default(uuid())
+  sessionId             String
+  session               Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  requestId             String?
+  kind                  String
+  source                String?
+  metadata              Json?
+  escalationLevelBefore Int
+  escalationLevelAfter  Int
+  createdAt             DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([kind, createdAt])
+}
+
+model RouteDecision {
+  id               String   @id @default(uuid())
+  requestId        String   @unique
+  request          Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  routerVersion    String
+  taskClass        String
+  selectedProvider String
+  selectedModel    String
+  explanation      Json
+  candidates       Json
+  createdAt        DateTime @default(now())
+}
+
+model ProviderAttempt {
+  id                String        @id @default(uuid())
+  requestId         String
+  request           Request       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  provider          String
+  model             String
+  providerRequestId String?
+  status            AttemptStatus @default(STARTED)
+  sequence          Int
+  startedAt         DateTime      @default(now())
+  completedAt       DateTime?
+  firstTokenAt      DateTime?
+  errorType         String?
+  errorMessage      String?
+
+  usageEvents UsageEvent[]
+
+  @@unique([requestId, sequence])
+  @@index([provider, model, startedAt])
+}
+
+model UsageEvent {
+  id                   String           @id @default(uuid())
+  requestId            String
+  request              Request          @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  providerAttemptId    String?          @unique
+  providerAttempt      ProviderAttempt? @relation(fields: [providerAttemptId], references: [id], onDelete: SetNull)
+  provider             String
+  model                String
+  upstreamModel        String
+  attemptStatus        AttemptStatus
+  inputTokens          Int              @default(0)
+  cachedInputTokens    Int              @default(0)
+  outputTokens         Int              @default(0)
+  reasoningTokens      Int              @default(0)
+  toolCost             Decimal          @default(0) @db.Decimal(24, 12)
+  estimatedCost        Decimal          @default(0) @db.Decimal(24, 12)
+  currency             String           @default("USD")
+  priceBookVersion     String
+  priceBook            PriceBook        @relation(fields: [priceBookVersion], references: [version], onDelete: Restrict)
+  inputPricePerMillion Decimal          @db.Decimal(24, 12)
+  cachedInputPricePerMillion Decimal    @db.Decimal(24, 12)
+  outputPricePerMillion Decimal         @db.Decimal(24, 12)
+  reasoningPricePerMillion Decimal      @db.Decimal(24, 12)
+  pricingSource        String
+  pricingEffectiveFrom DateTime         @db.Date
+  pricingVerifiedAt    DateTime         @db.Date
+  createdAt            DateTime         @default(now())
+
+  @@index([requestId, createdAt])
+  @@index([provider, model, createdAt])
+  @@index([priceBookVersion, createdAt])
+}
+
+model PriceBook {
+  version      String   @id
+  currency     String   @default("USD")
+  createdAt    DateTime @default(now())
+
+  entries      PriceBookEntry[]
+  usageEvents  UsageEvent[]
+  baselines    RequestCostBaseline[]
+}
+
+model PriceBookEntry {
+  id                      String    @id @default(uuid())
+  priceBookVersion        String
+  priceBook               PriceBook @relation(fields: [priceBookVersion], references: [version], onDelete: Restrict)
+  provider                String
+  model                   String
+  upstreamModel           String
+  inputPricePerMillion    Decimal   @db.Decimal(24, 12)
+  cachedInputPricePerMillion Decimal @db.Decimal(24, 12)
+  outputPricePerMillion   Decimal   @db.Decimal(24, 12)
+  reasoningPricePerMillion Decimal  @db.Decimal(24, 12)
+  effectiveFrom           DateTime  @db.Date
+  verifiedAt              DateTime  @db.Date
+  source                  String
+  createdAt               DateTime  @default(now())
+
+  @@unique([priceBookVersion, provider, model])
+  @@index([provider, model, priceBookVersion])
+}
+
+model RequestCostBaseline {
+  requestId            String    @id
+  request              Request   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  provider             String
+  model                String
+  upstreamModel        String
+  inputTokens          Int
+  expectedOutputTokens Int
+  estimatedCost        Decimal   @db.Decimal(24, 12)
+  currency             String    @default("USD")
+  priceBookVersion     String
+  priceBook            PriceBook @relation(fields: [priceBookVersion], references: [version], onDelete: Restrict)
+  createdAt            DateTime  @default(now())
+
+  @@index([priceBookVersion, createdAt])
+  @@index([provider, model, createdAt])
+}
+
+model ModelHealthSample {
+  id          String   @id @default(uuid())
+  provider    String
+  model       String
+  healthy     Boolean
+  latencyMs   Int?
+  errorType   String?
+  observedAt  DateTime @default(now())
+
+  @@index([provider, model, observedAt])
+}
