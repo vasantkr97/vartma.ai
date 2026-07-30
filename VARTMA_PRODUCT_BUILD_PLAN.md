@@ -40,7 +40,7 @@ It will ultimately route between:
 
 ## Current implementation status
 
-Updated: 2026-07-28
+Updated: 2026-07-30
 
 | Section                                                       | Status                            | Evidence                                                                                                                          |
 | ------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -55,7 +55,7 @@ Updated: 2026-07-28
 | Section 8 — Usage, cost, and savings analytics                | In progress and locally validated | Failed-attempt-inclusive ledger, declared baseline, immutable price evidence, aggregate and request APIs                          |
 | Sections 9–12                                                 | Planned                           | Evaluation, dashboard, production hardening, commercial platform                                                                  |
 
-Current verification: 30 test files and 166 tests pass. Build, strict type checking, lint,
+Current verification: 33 test files and 179 tests pass. Build, strict type checking, lint,
 formatting, Prisma generation/validation, router configuration validation, CLI command checks, and
 the offline real-Claude-Code smoke test pass locally. The official OpenAI Node SDK passes both
 Responses JSON/SSE and Chat Completions requests against the router. Native Gemini and a local
