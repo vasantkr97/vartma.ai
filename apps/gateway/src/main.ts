@@ -1,12 +1,17 @@
 import { resolve } from "node:path";
 
-import { loadConfig } from "@vartma/config";
+import { loadConfig, resolveCredentialStorePath } from "@vartma/config";
 
+import { createRuntime } from "./runtime.js";
 import { startServer } from "./server.js";
 
 const configPath = resolve(process.env["VARTMA_CONFIG_PATH"] ?? "./configs/vartma.example.yaml");
 const config = await loadConfig({ path: configPath });
-const server = await startServer(config);
+const server = await startServer(config, {
+  runtime: createRuntime(config, {
+    credentialStorePath: resolveCredentialStorePath(configPath, config.credentials.storePath),
+  }),
+});
 const address = server.address();
 
 process.stdout.write(

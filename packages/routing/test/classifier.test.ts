@@ -47,4 +47,16 @@ describe("deterministic task classifier", () => {
 
     expect(classifyTask(request, estimate).difficulty).toBe(4);
   });
+
+  it("classifies the current turn without letting an older expensive task dominate", () => {
+    const request = testRequest("Design the distributed system architecture");
+    request.messages.push(
+      { role: "assistant", content: [{ type: "text", text: "Architecture completed." }] },
+      { role: "user", content: [{ type: "text", text: "Explain this variable" }] },
+    );
+
+    const result = classifyTask(request, estimate);
+    expect(result).toMatchObject({ taskClass: "explanation", difficulty: 1 });
+    expect(result.signals.promptCharacters).toBe("Explain this variable".length);
+  });
 });

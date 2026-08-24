@@ -13,15 +13,15 @@
 
 | Threat                               | Initial control                                         |
 | ------------------------------------ | ------------------------------------------------------- |
-| Provider keys exposed in logs        | Pino path redaction; environment/secret storage         |
+| Provider keys exposed in logs        | Pino redaction; AES-GCM BYOK vault or environment keys  |
 | Unauthorized gateway use             | API-key middleware with timing-safe comparison          |
 | Oversized JSON request               | Configured Express body limit                           |
 | Malicious configurable provider URL  | Provider endpoint allowlist before live custom adapters |
-| Cross-request data leak              | Stateless request normalization; no global prompt cache |
+| Cross-request data leak              | Session-keyed encrypted canonical transcript store      |
 | Prompt content exported to telemetry | Content export disabled by default                      |
-| Hanging upstream stream              | AbortSignal propagation and later provider deadlines    |
+| Hanging upstream stream              | AbortSignal propagation and bounded provider deadlines  |
 | Duplicate side effects after retry   | No automatic replay after completed tool calls          |
-| Dependency compromise                | Lockfile, CI audit/scanning, signed releases later      |
+| Dependency compromise                | Lockfile and high-severity production audit in CI       |
 
 ## Deferred security work
 

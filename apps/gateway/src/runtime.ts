@@ -1,5 +1,11 @@
 import type { ModelDefinition } from "@vartma/canonical";
-import type { RouterConfig } from "@vartma/config";
+import { resolve } from "node:path";
+
+import {
+  readEncryptedCredential,
+  resolveOpenAICompatibleEndpoint,
+  type RouterConfig,
+} from "@vartma/config";
 import {
   AnthropicProvider,
   FakeProvider,
@@ -15,7 +21,12 @@ export interface Runtime {
   models: Map<string, ModelDefinition>;
 }
 
-export function createRuntime(config: RouterConfig): Runtime {
+export interface CreateRuntimeOptions {
+  credentialStorePath?: string;
+  environment?: NodeJS.ProcessEnv;
+}
+
+export function createRuntime(config: RouterConfig, options: CreateRuntimeOptions = {}): Runtime {
   const registry = new ProviderRegistry();
   const models = new Map<string, ModelDefinition>();
 
@@ -36,7 +47,7 @@ export function createRuntime(config: RouterConfig): Runtime {
       }
     }
 
-    registry.register(createProviderAdapter(provider, enabledModels));
+    registry.register(createProviderAdapter(provider, enabledModels, config, options));
 
     for (const model of enabledModels) {
       if (models.has(model.id)) {
@@ -59,6 +70,8 @@ export function createRuntime(config: RouterConfig): Runtime {
 function createProviderAdapter(
   provider: RouterConfig["providers"][number],
   models: ModelDefinition[],
+  config: RouterConfig,
+  runtimeOptions: CreateRuntimeOptions,
 ): ProviderAdapter {
   const shared = {
     name: provider.id,
@@ -81,44 +94,69 @@ function createProviderAdapter(
     case "anthropic":
       return new AnthropicProvider({
         ...shared,
-        apiKey: readProviderApiKey(provider),
+        apiKey: readProviderApiKey(provider, config, runtimeOptions),
         ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
       });
     case "openai":
       return new OpenAIProvider({
         ...shared,
-        apiKey: readProviderApiKey(provider),
+        apiKey: readProviderApiKey(provider, config, runtimeOptions),
         ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
       });
-    case "openai-compatible":
+    case "openai-compatible": {
+      const compatible = resolveOpenAICompatibleEndpoint(provider);
+      const apiKey =
+        compatible.authentication === "none"
+          ? undefined
+          : readProviderApiKey(provider, config, runtimeOptions);
       return new OpenAICompatibleProvider({
         ...shared,
-        apiKey: readProviderApiKey(provider),
-        baseUrl: requireBaseUrl(provider),
+        ...(apiKey ? { apiKey } : {}),
+        authentication: compatible.authentication,
+        baseUrl: compatible.baseUrl,
+        chatCompletionsPath: compatible.chatCompletionsPath,
+        maxOutputTokensField: compatible.maxOutputTokensField,
+        sendStreamUsage: compatible.sendStreamUsage,
       });
+    }
     case "gemini":
       return new GeminiProvider({
         ...shared,
-        apiKey: readProviderApiKey(provider),
+        apiKey: readProviderApiKey(provider, config, runtimeOptions),
         ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
       });
   }
 }
 
-function requireBaseUrl(provider: RouterConfig["providers"][number]): string {
-  if (!provider.baseUrl) {
-    throw new Error(`Provider "${provider.id}" requires a baseUrl.`);
+function readProviderApiKey(
+  provider: RouterConfig["providers"][number],
+  config: RouterConfig,
+  options: CreateRuntimeOptions,
+): string {
+  const environment = options.environment ?? process.env;
+  if (provider.credentialRef) {
+    const masterKey = environment[config.credentials.masterKeyEnv];
+    if (!masterKey) {
+      throw new Error(
+        `Provider "${provider.id}" uses encrypted credentials and requires master-key environment variable "${config.credentials.masterKeyEnv}".`,
+      );
+    }
+    const credential = readEncryptedCredential({
+      path: options.credentialStorePath ?? resolve(config.credentials.storePath),
+      masterKey,
+      reference: provider.credentialRef,
+    });
+    if (!credential) {
+      throw new Error(
+        `Provider "${provider.id}" credential reference "${provider.credentialRef}" was not found in the encrypted store.`,
+      );
+    }
+    return credential;
   }
-  return provider.baseUrl;
-}
-
-function readProviderApiKey(provider: RouterConfig["providers"][number]): string {
   if (!provider.apiKeyEnv) {
-    throw new Error(
-      `Provider "${provider.id}" requires apiKeyEnv to name its API-key environment variable.`,
-    );
+    throw new Error(`Provider "${provider.id}" requires apiKeyEnv or credentialRef.`);
   }
-  const value = process.env[provider.apiKeyEnv];
+  const value = environment[provider.apiKeyEnv];
   if (!value?.trim()) {
     throw new Error(
       `Provider "${provider.id}" requires environment variable "${provider.apiKeyEnv}".`,

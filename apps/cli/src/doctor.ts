@@ -1,4 +1,11 @@
-import type { RouterConfig } from "@vartma/config";
+import { resolve } from "node:path";
+
+import {
+  providerRequiresCredential,
+  readEncryptedCredential,
+  resolveOpenAICompatibleEndpoint,
+  type RouterConfig,
+} from "@vartma/config";
 import { checkDatabase, createDatabase } from "@vartma/database";
 
 export type DoctorCheckStatus = "pass" | "fail" | "skip";
@@ -28,7 +35,7 @@ export interface DoctorDependencies {
 
 export async function runDoctor(
   config: RouterConfig,
-  options: { timeoutMs: number },
+  options: { timeoutMs: number; credentialStorePath?: string },
   dependencies: DoctorDependencies = {},
 ): Promise<DoctorReport> {
   const environment = dependencies.environment ?? process.env;
@@ -45,7 +52,12 @@ export async function runDoctor(
   checks.push(
     ...(await runProviderDiagnostics(
       config,
-      { timeoutMs: options.timeoutMs },
+      {
+        timeoutMs: options.timeoutMs,
+        ...(options.credentialStorePath
+          ? { credentialStorePath: options.credentialStorePath }
+          : {}),
+      },
       { environment, fetchImplementation },
     )),
   );
@@ -64,7 +76,7 @@ export async function runDoctor(
 
 export async function runProviderDiagnostics(
   config: RouterConfig,
-  options: { timeoutMs: number; providerId?: string },
+  options: { timeoutMs: number; providerId?: string; credentialStorePath?: string },
   dependencies: Pick<DoctorDependencies, "environment" | "fetchImplementation"> = {},
 ): Promise<DoctorCheck[]> {
   const environment = dependencies.environment ?? process.env;
@@ -72,7 +84,18 @@ export async function runProviderDiagnostics(
   const providers = config.providers.filter(
     (provider) => provider.enabled && (!options.providerId || provider.id === options.providerId),
   );
-  const credentialChecks = credentialDiagnostics(providers, environment);
+  const credentials = new Map(
+    providers.map((provider) => [
+      provider.id,
+      resolveProviderCredential(
+        provider,
+        config,
+        environment,
+        options.credentialStorePath ?? resolve(config.credentials.storePath),
+      ),
+    ]),
+  );
+  const credentialChecks = credentialDiagnostics(providers, credentials);
   const missingCredentials = new Set(
     credentialChecks
       .filter((check) => check.status === "fail")
@@ -94,7 +117,7 @@ export async function runProviderDiagnostics(
             : checkProviderModel(
                 provider,
                 model.upstreamModel,
-                environment,
+                credentials.get(provider.id)?.value,
                 fetchImplementation,
                 options.timeoutMs,
               ),
@@ -119,22 +142,29 @@ export function formatDiagnosticReport(report: DoctorReport, label: string): str
 
 function credentialDiagnostics(
   providers: RouterConfig["providers"],
-  environment: NodeJS.ProcessEnv,
+  credentials: Map<string, ResolvedCredential>,
 ): DoctorCheck[] {
   return providers
     .filter((provider) => provider.enabled && provider.type !== "fake")
     .map((provider) => {
-      const environmentName = provider.apiKeyEnv;
-      const present = Boolean(environmentName && environment[environmentName]?.trim());
+      if (!providerRequiresCredential(provider)) {
+        return {
+          id: `credential:${provider.id}`,
+          category: "credential" as const,
+          status: "pass" as const,
+          message: "Provider is configured for unauthenticated access.",
+          durationMs: 0,
+        };
+      }
+      const credential = credentials.get(provider.id) ?? {
+        message: "Provider credential configuration is invalid.",
+      };
+      const present = Boolean(credential.value);
       return {
         id: `credential:${provider.id}`,
         category: "credential" as const,
         status: present ? ("pass" as const) : ("fail" as const),
-        message: present
-          ? `Credential environment variable ${environmentName ?? "(not configured)"} is set.`
-          : environmentName
-            ? `Missing credential environment variable ${environmentName}.`
-            : "Provider has no apiKeyEnv configured.",
+        message: credential.message,
         durationMs: 0,
       };
     });
@@ -143,7 +173,7 @@ function credentialDiagnostics(
 async function checkProviderModel(
   provider: RouterConfig["providers"][number],
   upstreamModel: string,
-  environment: NodeJS.ProcessEnv,
+  apiKey: string | undefined,
   fetchImplementation: typeof fetch,
   timeoutMs: number,
 ): Promise<DoctorCheck> {
@@ -157,8 +187,7 @@ async function checkProviderModel(
       durationMs: elapsed(startedAt),
     };
   }
-  const apiKey = provider.apiKeyEnv ? environment[provider.apiKeyEnv]?.trim() : undefined;
-  if (!apiKey) {
+  if (providerRequiresCredential(provider) && !apiKey) {
     return {
       id: `provider:${provider.id}:${upstreamModel}`,
       category: "provider",
@@ -206,35 +235,88 @@ async function checkProviderModel(
   }
 }
 
+interface ResolvedCredential {
+  value?: string;
+  message: string;
+}
+
+function resolveProviderCredential(
+  provider: RouterConfig["providers"][number],
+  config: RouterConfig,
+  environment: NodeJS.ProcessEnv,
+  credentialStorePath: string,
+): ResolvedCredential {
+  if (provider.type === "fake") {
+    return { value: "not-required", message: "Provider does not require a credential." };
+  }
+  if (provider.credentialRef) {
+    const masterKey = environment[config.credentials.masterKeyEnv];
+    if (!masterKey) {
+      return {
+        message: `Missing credential master-key environment variable ${config.credentials.masterKeyEnv}.`,
+      };
+    }
+    try {
+      const value = readEncryptedCredential({
+        path: credentialStorePath,
+        masterKey,
+        reference: provider.credentialRef,
+      });
+      return value
+        ? {
+            value,
+            message: `Encrypted credential reference ${provider.credentialRef} is present.`,
+          }
+        : {
+            message: `Encrypted credential reference ${provider.credentialRef} is missing.`,
+          };
+    } catch {
+      return { message: "Encrypted credential authentication failed." };
+    }
+  }
+  const environmentName = provider.apiKeyEnv;
+  const value = environmentName ? environment[environmentName]?.trim() : undefined;
+  return value
+    ? { value, message: `Credential environment variable ${environmentName} is set.` }
+    : {
+        message: environmentName
+          ? `Missing credential environment variable ${environmentName}.`
+          : "Provider has no credential source configured.",
+      };
+}
+
 function providerProbe(
   provider: RouterConfig["providers"][number],
   upstreamModel: string,
-  apiKey: string,
+  apiKey: string | undefined,
 ): { url: string; headers: Record<string, string>; modelList?: boolean } {
   switch (provider.type) {
     case "anthropic":
       return {
         url: `${trimTrailingSlash(provider.baseUrl ?? "https://api.anthropic.com")}/v1/models/${encodeURIComponent(upstreamModel)}`,
         headers: {
-          "x-api-key": apiKey,
+          "x-api-key": apiKey!,
           "anthropic-version": "2023-06-01",
         },
       };
     case "openai":
       return {
         url: `${trimTrailingSlash(provider.baseUrl ?? "https://api.openai.com")}/v1/models/${encodeURIComponent(upstreamModel)}`,
-        headers: { authorization: `Bearer ${apiKey}` },
+        headers: { authorization: `Bearer ${apiKey!}` },
       };
-    case "openai-compatible":
+    case "openai-compatible": {
+      const compatible = resolveOpenAICompatibleEndpoint(provider);
       return {
-        url: `${trimTrailingSlash(requireBaseUrl(provider))}/v1/models`,
-        headers: { authorization: `Bearer ${apiKey}` },
+        url: `${compatible.baseUrl}${compatible.modelsPath}`,
+        headers:
+          compatible.authentication === "bearer" ? { authorization: `Bearer ${apiKey!}` } : {},
         modelList: true,
       };
+    }
     case "gemini":
       return {
         url: `${trimTrailingSlash(provider.baseUrl ?? "https://generativelanguage.googleapis.com")}/v1beta/models/${encodeURIComponent(upstreamModel)}`,
-        headers: { "x-goog-api-key": apiKey },
+        headers: { "x-goog-api-key": apiKey! },
       };
     case "fake":
       throw new Error("The fake provider does not require an HTTP probe.");
@@ -309,13 +391,6 @@ async function checkConfiguredDatabase(
       durationMs: elapsed(startedAt),
     };
   }
-}
-
-function requireBaseUrl(provider: RouterConfig["providers"][number]): string {
-  if (!provider.baseUrl) {
-    throw new Error(`Provider ${provider.id} has no baseUrl.`);
-  }
-  return provider.baseUrl;
 }
 
 function trimTrailingSlash(value: string): string {

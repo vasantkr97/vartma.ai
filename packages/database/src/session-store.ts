@@ -15,29 +15,15 @@ export class PrismaSessionStateStore implements SessionStateStore {
     if (!session) {
       return undefined;
     }
-    return {
-      id: session.id,
-      routingMode: asRoutingMode(session.routingMode),
-      ...(session.currentProvider ? { currentProvider: session.currentProvider } : {}),
-      ...(session.currentModel ? { currentModel: session.currentModel } : {}),
-      escalationLevel: session.escalationLevel,
-      turnCount: session.turnCount,
-      ...(session.lastTaskClass ? { lastTaskClass: session.lastTaskClass as TaskClass } : {}),
-      consecutiveFailures: session.consecutiveFailures,
-      successfulOutcomes: session.successfulOutcomes,
-      accumulatedCostUsd: session.accumulatedCost.toString(),
-      tokenUsage: {
-        inputTokens: session.inputTokens.toString(),
-        cachedInputTokens: session.cachedInputTokens.toString(),
-        outputTokens: session.outputTokens.toString(),
-        reasoningTokens: session.reasoningTokens.toString(),
-      },
-      ...(session.lastEscalatedAt
-        ? { lastEscalatedAt: session.lastEscalatedAt.toISOString() }
-        : {}),
-      ...(session.cooldownUntil ? { cooldownUntil: session.cooldownUntil.toISOString() } : {}),
-      lastActivityAt: session.lastActivityAt.toISOString(),
-    };
+    return sessionState(session);
+  }
+
+  public async list(limit: number): Promise<SessionState[]> {
+    const sessions = await this.database.session.findMany({
+      orderBy: { lastActivityAt: "desc" },
+      take: limit,
+    });
+    return sessions.map(sessionState);
   }
 
   public async save(state: SessionState): Promise<void> {
@@ -71,6 +57,58 @@ export class PrismaSessionStateStore implements SessionStateStore {
   }
 }
 
+function sessionState(session: {
+  id: string;
+  routingMode: string;
+  currentProvider: string | null;
+  currentModel: string | null;
+  escalationLevel: number;
+  automaticEscalationLevel: number;
+  turnCount: number;
+  lastTaskClass: string | null;
+  consecutiveFailures: number;
+  successfulOutcomes: number;
+  accumulatedCost: { toString(): string };
+  inputTokens: bigint;
+  cachedInputTokens: bigint;
+  outputTokens: bigint;
+  reasoningTokens: bigint;
+  lastEscalatedAt: Date | null;
+  cooldownUntil: Date | null;
+  lastProgressFingerprint: string | null;
+  automaticStuckUntil: Date | null;
+  lastActivityAt: Date;
+}): SessionState {
+  return {
+    id: session.id,
+    routingMode: asRoutingMode(session.routingMode),
+    ...(session.currentProvider ? { currentProvider: session.currentProvider } : {}),
+    ...(session.currentModel ? { currentModel: session.currentModel } : {}),
+    escalationLevel: session.escalationLevel,
+    turnCount: session.turnCount,
+    ...(session.lastTaskClass ? { lastTaskClass: session.lastTaskClass as TaskClass } : {}),
+    consecutiveFailures: session.consecutiveFailures,
+    successfulOutcomes: session.successfulOutcomes,
+    accumulatedCostUsd: session.accumulatedCost.toString(),
+    tokenUsage: {
+      inputTokens: session.inputTokens.toString(),
+      cachedInputTokens: session.cachedInputTokens.toString(),
+      outputTokens: session.outputTokens.toString(),
+      reasoningTokens: session.reasoningTokens.toString(),
+    },
+    ...(session.lastEscalatedAt ? { lastEscalatedAt: session.lastEscalatedAt.toISOString() } : {}),
+    ...(session.cooldownUntil ? { cooldownUntil: session.cooldownUntil.toISOString() } : {}),
+    ...(session.lastProgressFingerprint
+      ? { lastProgressFingerprint: session.lastProgressFingerprint }
+      : {}),
+    ...(session.automaticStuckUntil
+      ? { automaticStuckUntil: session.automaticStuckUntil.toISOString() }
+      : {}),
+    automaticEscalationLevel: session.automaticEscalationLevel,
+    lastActivityAt: session.lastActivityAt.toISOString(),
+  };
+}
+
 function sessionData(state: SessionState) {
   return {
     id: state.id,
@@ -84,6 +122,9 @@ function sessionData(state: SessionState) {
     successfulOutcomes: state.successfulOutcomes,
     lastEscalatedAt: state.lastEscalatedAt ? new Date(state.lastEscalatedAt) : null,
     cooldownUntil: state.cooldownUntil ? new Date(state.cooldownUntil) : null,
+    lastProgressFingerprint: state.lastProgressFingerprint ?? null,
+    automaticStuckUntil: state.automaticStuckUntil ? new Date(state.automaticStuckUntil) : null,
+    automaticEscalationLevel: state.automaticEscalationLevel,
     lastActivityAt: new Date(state.lastActivityAt),
   };
 }

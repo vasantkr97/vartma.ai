@@ -11,6 +11,12 @@ auth:
   apiKeys:
     - local-development-key
 
+# Provider keys can remain in environment variables or be encrypted by `vartma login`.
+# Keep VARTMA_MASTER_KEY outside this file and outside source control.
+credentials:
+  storePath: .vartma/credentials.enc
+  masterKeyEnv: VARTMA_MASTER_KEY
+
 database:
   url: postgresql://vartma:vartma@localhost:5432/vartma?schema=public
   requiredForReadiness: true

@@ -2,6 +2,7 @@ import type { RoutingMode } from "@vartma/canonical";
 import type { ModelDefinition } from "@vartma/canonical";
 
 import type { SessionRoutingPolicy } from "./resilience.js";
+import type { ProgressAssessment } from "./progress.js";
 import type { RoutingDecision, TaskClass } from "./types.js";
 
 export const SESSION_OUTCOME_KINDS = [
@@ -36,6 +37,9 @@ export interface SessionState {
   };
   lastEscalatedAt?: string;
   cooldownUntil?: string;
+  lastProgressFingerprint?: string;
+  automaticStuckUntil?: string;
+  automaticEscalationLevel: number;
   lastActivityAt: string;
 }
 
@@ -55,6 +59,7 @@ export interface StoredSessionOutcome extends SessionOutcomeInput {
 
 export interface SessionStateStore {
   get(sessionId: string): Promise<SessionState | undefined>;
+  list(limit: number): Promise<SessionState[]>;
   save(state: SessionState): Promise<void>;
   saveOutcome(state: SessionState, outcome: StoredSessionOutcome): Promise<void>;
 }
@@ -63,6 +68,13 @@ export interface OutcomeResult {
   state: SessionState;
   escalated: boolean;
   deescalated: boolean;
+}
+
+export interface ProgressObservationResult {
+  state: SessionState;
+  escalated: boolean;
+  expired: boolean;
+  duplicate: boolean;
 }
 
 export class InMemorySessionStateStore implements SessionStateStore {
@@ -77,6 +89,15 @@ export class InMemorySessionStateStore implements SessionStateStore {
   public save(state: SessionState): Promise<void> {
     this.states.set(state.id, structuredClone(state));
     return Promise.resolve();
+  }
+
+  public list(limit: number): Promise<SessionState[]> {
+    return Promise.resolve(
+      [...this.states.values()]
+        .sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))
+        .slice(0, limit)
+        .map((state) => structuredClone(state)),
+    );
   }
 
   public saveOutcome(state: SessionState, outcome: StoredSessionOutcome): Promise<void> {
@@ -184,6 +205,91 @@ export class SessionCoordinator {
     };
   }
 
+  public async observeProgress(
+    sessionId: string,
+    routingMode: RoutingMode,
+    assessment: ProgressAssessment,
+    requestId?: string,
+  ): Promise<ProgressObservationResult> {
+    const state = await this.get(sessionId, routingMode);
+    const now = this.now();
+    const automaticVerdictExpired =
+      Boolean(state.automaticStuckUntil) && Date.parse(state.automaticStuckUntil!) <= now.getTime();
+    let updated: SessionState = state;
+
+    if (automaticVerdictExpired) {
+      updated = {
+        ...updated,
+        escalationLevel: Math.max(0, updated.escalationLevel - updated.automaticEscalationLevel),
+        automaticEscalationLevel: 0,
+        lastActivityAt: now.toISOString(),
+      };
+      delete updated.automaticStuckUntil;
+      delete updated.lastProgressFingerprint;
+      await this.store.save(updated);
+    }
+
+    if (assessment.status !== "stuck" || !assessment.fingerprint) {
+      return {
+        state: updated,
+        escalated: false,
+        expired: automaticVerdictExpired,
+        duplicate: false,
+      };
+    }
+
+    if (updated.lastProgressFingerprint === assessment.fingerprint) {
+      return {
+        state: updated,
+        escalated: false,
+        expired: automaticVerdictExpired,
+        duplicate: true,
+      };
+    }
+
+    const levelBefore = updated.escalationLevel;
+    const escalationLevel = Math.min(this.policy.maxEscalationLevel, levelBefore + 1);
+    const automaticEscalationLevel =
+      updated.automaticEscalationLevel + (escalationLevel > levelBefore ? 1 : 0);
+    const automaticStuckUntil = new Date(
+      now.getTime() + this.policy.automaticStuckVerdictTtlMs,
+    ).toISOString();
+    updated = {
+      ...updated,
+      routingMode,
+      escalationLevel,
+      automaticEscalationLevel,
+      consecutiveFailures: 0,
+      successfulOutcomes: 0,
+      lastProgressFingerprint: assessment.fingerprint,
+      automaticStuckUntil,
+      lastEscalatedAt: now.toISOString(),
+      cooldownUntil: new Date(now.getTime() + this.policy.deescalationCooldownMs).toISOString(),
+      lastActivityAt: now.toISOString(),
+    };
+    const outcome: StoredSessionOutcome = {
+      sessionId,
+      kind: "stuck",
+      ...(requestId ? { requestId } : {}),
+      source: "vartma-transcript-progress-detector",
+      metadata: {
+        fingerprint: assessment.fingerprint,
+        confidence: assessment.confidence.toFixed(2),
+        reasons: assessment.reasons.join("; "),
+      },
+      escalationLevelBefore: levelBefore,
+      escalationLevelAfter: escalationLevel,
+      createdAt: now.toISOString(),
+    };
+    await this.store.saveOutcome(updated, outcome);
+    return {
+      state: updated,
+      escalated: escalationLevel > levelBefore,
+      expired: automaticVerdictExpired,
+      duplicate: false,
+    };
+  }
+
   private create(sessionId: string, routingMode: RoutingMode): SessionState {
     return {
       id: sessionId,
@@ -192,6 +298,7 @@ export class SessionCoordinator {
       turnCount: 0,
       consecutiveFailures: 0,
       successfulOutcomes: 0,
+      automaticEscalationLevel: 0,
       accumulatedCostUsd: "0",
       tokenUsage: {
         inputTokens: "0",

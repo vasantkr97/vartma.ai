@@ -8,6 +8,7 @@ export interface SessionRoutingPolicy {
   maxEscalationLevel: number;
   successfulOutcomesToDeescalate: number;
   deescalationCooldownMs: number;
+  automaticStuckVerdictTtlMs: number;
 }
 
 export interface FallbackPolicy {
@@ -31,6 +32,7 @@ export const defaultSessionRoutingPolicy: SessionRoutingPolicy = {
   maxEscalationLevel: 4,
   successfulOutcomesToDeescalate: 3,
   deescalationCooldownMs: 5 * 60 * 1000,
+  automaticStuckVerdictTtlMs: 10 * 60 * 1000,
 };
 
 export const defaultFallbackPolicy: FallbackPolicy = {
@@ -75,6 +77,11 @@ export const sessionRoutingPolicySchema = z
       .int()
       .nonnegative()
       .default(defaultSessionRoutingPolicy.deescalationCooldownMs),
+    automaticStuckVerdictTtlMs: z
+      .number()
+      .int()
+      .positive()
+      .default(defaultSessionRoutingPolicy.automaticStuckVerdictTtlMs),
   })
   .strict()
   .default(defaultSessionRoutingPolicy);

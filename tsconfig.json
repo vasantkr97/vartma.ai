@@ -6,6 +6,8 @@
     { "path": "./packages/providers" },
     { "path": "./packages/routing" },
     { "path": "./packages/database" },
+    { "path": "./packages/evals" },
+    { "path": "./apps/console" },
     { "path": "./apps/gateway" },
     { "path": "./apps/cli" }
   ]

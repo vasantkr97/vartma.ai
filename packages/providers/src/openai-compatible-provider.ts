@@ -29,6 +29,9 @@ import type { ProviderAdapter } from "./provider.js";
 
 export interface OpenAICompatibleProviderOptions extends Omit<HttpProviderOptions, "baseUrl"> {
   baseUrl: string;
+  chatCompletionsPath?: string;
+  maxOutputTokensField?: "max_completion_tokens" | "max_tokens";
+  sendStreamUsage?: boolean;
 }
 
 interface CompatibleStreamState {
@@ -46,10 +49,18 @@ interface CompatibleStreamState {
 export class OpenAICompatibleProvider implements ProviderAdapter {
   public readonly name: string;
   private readonly options: ResolvedHttpProviderOptions;
+  private readonly chatCompletionsPath: string;
+  private readonly maxOutputTokensField: "max_completion_tokens" | "max_tokens";
+  private readonly sendStreamUsage: boolean;
 
   public constructor(options: OpenAICompatibleProviderOptions) {
     this.options = resolveHttpProviderOptions(options);
     this.name = this.options.name;
+    this.chatCompletionsPath = normalizeApiPath(
+      options.chatCompletionsPath ?? "/v1/chat/completions",
+    );
+    this.maxOutputTokensField = options.maxOutputTokensField ?? "max_completion_tokens";
+    this.sendStreamUsage = options.sendStreamUsage ?? true;
   }
 
   public models(): Promise<ModelDefinition[]> {
@@ -75,10 +86,16 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
     try {
       const response = await requestSse({
         provider: this.name,
-        url: `${this.options.baseUrl}/v1/chat/completions`,
+        url: `${this.options.baseUrl}${this.chatCompletionsPath}`,
         apiKey: this.options.apiKey,
-        headers: { authorization: `Bearer ${this.options.apiKey}` },
-        body: toCompatibleChatRequest(model, request),
+        headers:
+          this.options.authentication === "bearer"
+            ? { authorization: `Bearer ${this.options.apiKey}` }
+            : {},
+        body: toCompatibleChatRequest(model, request, {
+          maxOutputTokensField: this.maxOutputTokensField,
+          sendStreamUsage: this.sendStreamUsage,
+        }),
         signal: execution.signal,
         maxRetries: this.options.maxRetries,
         fetchImplementation: this.options.fetchImplementation,
@@ -126,13 +143,18 @@ export class OpenAICompatibleProvider implements ProviderAdapter {
 export function toCompatibleChatRequest(
   model: string,
   request: CanonicalRequest,
+  options: {
+    maxOutputTokensField?: "max_completion_tokens" | "max_tokens";
+    sendStreamUsage?: boolean;
+  } = {},
 ): Record<string, unknown> {
+  const maxOutputTokensField = options.maxOutputTokensField ?? "max_completion_tokens";
   return {
     model,
     messages: toChatMessages(request),
     stream: true,
-    stream_options: { include_usage: true },
-    max_completion_tokens: request.maxOutputTokens,
+    ...(options.sendStreamUsage === false ? {} : { stream_options: { include_usage: true } }),
+    [maxOutputTokensField]: request.maxOutputTokens,
     ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
     ...(request.topP === undefined ? {} : { top_p: request.topP }),
     ...(request.stopSequences ? { stop: request.stopSequences } : {}),
@@ -165,6 +187,22 @@ export function toCompatibleChatRequest(
         }
       : {}),
   };
+}
+
+function normalizeApiPath(value: string): string {
+  if (
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("\\") ||
+    value.includes("..") ||
+    value.includes("?") ||
+    value.includes("#")
+  ) {
+    throw new Error(
+      "Provider API path must be an absolute path without traversal, query parameters, or fragments.",
+    );
+  }
+  return value.replace(/\/+$/u, "");
 }
 
 function toChatMessages(request: CanonicalRequest): unknown[] {

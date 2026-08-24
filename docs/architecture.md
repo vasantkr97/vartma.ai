@@ -1,4 +1,4 @@
-# Phase 6 Architecture
+# Vartma.ai Architecture
 
 ## Request path
 
@@ -70,14 +70,17 @@ state machines. It does not own HTTP or provider protocol translation.
 
 ## Availability boundary
 
-PostgreSQL makes session state, outcomes, switches, usage, and cost durable. Circuit state is
-process-local in Phase 4. A shared Redis circuit/session cache is deferred until multi-replica
-deployment; it is not required for the current single-gateway working router.
+PostgreSQL makes redacted configuration snapshots, session state, encrypted canonical transcripts,
+outcomes, switches, usage, cost, and evaluation runs durable. The YAML file remains the operator's
+authoritative startup input; every activated version is content-addressed in PostgreSQL without
+gateway keys or the database URL. Circuit state is process-local. A multi-replica deployment needs
+sticky routing or a shared circuit-state implementation; neither changes the provider-neutral
+protocol or durable ledger.
 
 ## AI framework policy
 
 - Direct provider APIs remain authoritative in the proxy path.
 - LangChain may be used for internal experiments or evaluators.
-- LangGraph may be used for long-running evaluation workflows.
+- LangGraph implements the long-running evaluation agent workflow.
 - LangSmith may receive redacted, sampled development/evaluation traces when explicitly enabled.
 - None of these tools may become required for gateway availability.

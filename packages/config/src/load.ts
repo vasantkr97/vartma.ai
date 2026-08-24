@@ -27,6 +27,7 @@ function applyEnvironmentOverrides(config: Record<string, unknown>, env: NodeJS.
   const server = ensureRecord(config, "server");
   const auth = ensureRecord(config, "auth");
   const database = ensureRecord(config, "database");
+  const credentials = ensureRecord(config, "credentials");
 
   if (env["VARTMA_HOST"]) {
     server["host"] = env["VARTMA_HOST"];
@@ -46,6 +47,9 @@ function applyEnvironmentOverrides(config: Record<string, unknown>, env: NodeJS.
   }
   if (env["DATABASE_URL"]) {
     database["url"] = env["DATABASE_URL"];
+  }
+  if (env["VARTMA_CREDENTIAL_STORE_PATH"]) {
+    credentials["storePath"] = env["VARTMA_CREDENTIAL_STORE_PATH"];
   }
 }
 

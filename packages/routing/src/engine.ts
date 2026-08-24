@@ -2,6 +2,7 @@ import type { CanonicalRequest, ModelDefinition, TokenEstimate } from "@vartma/c
 import type { ProviderRegistry } from "@vartma/providers";
 
 import { classifyTask } from "./classifier.js";
+import { predictModelPerformance, type RoutingCalibration } from "./calibration.js";
 import { estimateRequestCost } from "./cost.js";
 import type { SessionRoutingPolicy } from "./resilience.js";
 import { RoutingError } from "./registry.js";
@@ -25,6 +26,7 @@ export interface RoutingEngineOptions {
   routerVersion: string;
   sessionPolicy: SessionRoutingPolicy;
   baselineModel?: string;
+  calibration?: RoutingCalibration;
 }
 
 export interface RoutingContext {
@@ -73,7 +75,14 @@ export class RoutingEngine {
       );
     }
 
-    scoreCandidates(eligible, policy, context.session, this.options.sessionPolicy);
+    scoreCandidates(
+      eligible,
+      policy,
+      task,
+      this.options.calibration,
+      context.session,
+      this.options.sessionPolicy,
+    );
     const scoredSelection = selectCandidate(eligible, request.routingMode);
     const sessionSelection = applySessionHysteresis(
       scoredSelection,
@@ -389,29 +398,72 @@ function requestSizeReasons(
 }
 
 function scoreCandidates(
-  candidates: Array<RoutingCandidate & { estimatedCostUsd: number }>,
+  candidates: Array<RoutingCandidate & { estimatedCostUsd: number; tokenEstimate: TokenEstimate }>,
   policy: RoutingModePolicy,
+  task: TaskClassification,
+  calibration?: RoutingCalibration,
   session?: SessionState,
   sessionPolicy?: SessionRoutingPolicy,
 ): void {
-  const maximumCost = Math.max(...candidates.map((candidate) => candidate.estimatedCostUsd), 0);
-  for (const candidate of candidates) {
-    const expectedSuccess = Math.min(1, 0.35 + candidate.model.qualityTier * 0.13);
-    const normalizedCost = maximumCost === 0 ? 0 : candidate.estimatedCostUsd / maximumCost;
-    const normalizedLatency = candidate.model.expectedLatencyTier / 5;
+  const scoredInputs = candidates.map((candidate) => {
+    const prediction = predictModelPerformance(calibration, candidate.model, task);
+    const sameSessionModel = session?.currentModel === candidate.model.id;
+    const warmInputCostUsd =
+      ((candidate.tokenEstimate?.inputTokens ?? 0) *
+        candidate.model.pricing.cachedInputPerMillion) /
+      1_000_000;
+    const coldInputCostUsd =
+      ((candidate.tokenEstimate?.inputTokens ?? 0) * candidate.model.pricing.inputPerMillion) /
+      1_000_000;
+    const outputCostUsd =
+      ((candidate.tokenEstimate?.expectedOutputTokens ?? 0) *
+        candidate.model.pricing.outputPerMillion) /
+      1_000_000;
+    const firstAttemptCostUsd =
+      (sameSessionModel ? warmInputCostUsd : coldInputCostUsd) + outputCostUsd;
+    const retryAttemptCostUsd = warmInputCostUsd + outputCostUsd;
+    const retryAdjustedCostUsd =
+      firstAttemptCostUsd + Math.max(0, prediction.expectedAttempts - 1) * retryAttemptCostUsd;
+    const expectedTotalCostUsd = retryAdjustedCostUsd / Math.max(0.05, prediction.expectedSuccess);
+    const switchColdInputCostUsd =
+      session?.currentModel && !sameSessionModel
+        ? Math.max(0, coldInputCostUsd - warmInputCostUsd)
+        : 0;
+    return { candidate, prediction, expectedTotalCostUsd, switchColdInputCostUsd };
+  });
+  const maximumCost = Math.max(...scoredInputs.map((item) => item.expectedTotalCostUsd), 0);
+  const maximumLatency = Math.max(
+    ...scoredInputs.map(
+      (item) => item.prediction.observedLatencyMs ?? item.candidate.model.expectedLatencyMs ?? 0,
+    ),
+    0,
+  );
+  for (const item of scoredInputs) {
+    const { candidate, prediction, expectedTotalCostUsd, switchColdInputCostUsd } = item;
+    const normalizedCost = maximumCost === 0 ? 0 : expectedTotalCostUsd / maximumCost;
+    const observedLatency = prediction.observedLatencyMs ?? candidate.model.expectedLatencyMs;
+    const normalizedLatency =
+      observedLatency !== undefined && maximumLatency > 0
+        ? observedLatency / maximumLatency
+        : candidate.model.expectedLatencyTier / 5;
     const failureRisk = candidate.health?.healthy ? 0 : 1;
     const sessionSwitchPenalty =
       sessionPolicy?.enabled && session?.currentModel && session.currentModel !== candidate.model.id
         ? sessionPolicy.switchPenalty
         : 0;
     const total =
-      policy.qualityWeight * expectedSuccess -
+      policy.qualityWeight * prediction.expectedSuccess -
       policy.costWeight * normalizedCost -
       policy.latencyWeight * normalizedLatency -
       policy.failureWeight * failureRisk -
       sessionSwitchPenalty;
     candidate.score = {
-      expectedSuccess,
+      expectedSuccess: prediction.expectedSuccess,
+      expectedAttempts: prediction.expectedAttempts,
+      expectedTotalCostUsd,
+      switchColdInputCostUsd,
+      calibrationSource: prediction.source,
+      calibrationSampleSize: prediction.sampleSize,
       normalizedCost,
       normalizedLatency,
       failureRisk,
@@ -558,6 +610,8 @@ function explainSelection(
     `passed all capability, policy, health, and budget filters`,
     `quality tier ${selected.model.qualityTier}`,
     `estimated cost $${selected.estimatedCostUsd.toFixed(6)}`,
+    `expected cost per successful completion $${selected.score.expectedTotalCostUsd.toFixed(6)}`,
+    `success estimate ${(selected.score.expectedSuccess * 100).toFixed(1)}% from ${selected.score.calibrationSource} (${selected.score.calibrationSampleSize} samples)`,
     `mode score ${selected.score.total.toFixed(6)}`,
   ];
   if (sessionSelection.sticky) {

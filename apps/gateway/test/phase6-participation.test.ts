@@ -8,6 +8,69 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "../src/index.js";
 
 describe("Phase 6 provider participation", () => {
+  it.each([
+    ["kimi", "/v1/chat/completions", "max_completion_tokens", true],
+    ["deepseek", "/chat/completions", "max_tokens", false],
+    ["zai", "/chat/completions", "max_tokens", false],
+    ["xai", "/v1/chat/completions", "max_tokens", false],
+  ] as const)(
+    "routes through the %s compatibility profile",
+    async (profile, expectedPath, tokenField, sendsStreamUsage) => {
+      await withMockServer(
+        async (incoming, response) => {
+          expect(incoming.url).toBe(expectedPath);
+          expect(incoming.headers["authorization"]).toBe("Bearer profile-test-key");
+          const body = JSON.parse(await readBody(incoming)) as Record<string, unknown>;
+          expect(body[tokenField]).toBe(256);
+          expect(Object.hasOwn(body, "stream_options")).toBe(sendsStreamUsage);
+          writeSse(response, [
+            {
+              id: `chatcmpl_${profile}`,
+              model: `${profile}-test`,
+              choices: [
+                {
+                  index: 0,
+                  delta: { content: `${profile} route works` },
+                  finish_reason: "stop",
+                },
+              ],
+            },
+          ]);
+        },
+        async (baseUrl) => {
+          const previousKey = process.env["PROFILE_TEST_KEY"];
+          process.env["PROFILE_TEST_KEY"] = "profile-test-key";
+          try {
+            const app = createApp({
+              config: providerConfig({
+                id: profile,
+                type: "openai-compatible",
+                profile,
+                baseUrl,
+                apiKeyEnv: "PROFILE_TEST_KEY",
+                upstreamModel: `${profile}-test`,
+                tools: true,
+              }),
+              logger: pino({ level: "silent" }),
+            });
+            const result = await request(app)
+              .post("/v1/messages")
+              .send({
+                model: `${profile}/default`,
+                max_tokens: 256,
+                messages: [{ role: "user", content: `use ${profile}` }],
+              });
+            expect(result.status).toBe(200);
+            expect(result.headers["x-vartma-provider"]).toBe(profile);
+            expect(result.body.content[0].text).toBe(`${profile} route works`);
+          } finally {
+            restoreEnv("PROFILE_TEST_KEY", previousKey);
+          }
+        },
+      );
+    },
+  );
+
   it("routes through a local OpenAI-compatible model and rejects unsupported tools preflight", async () => {
     let upstreamRequests = 0;
     await withMockServer(
@@ -161,6 +224,7 @@ interface ProviderFixture {
   id: string;
   type: "gemini" | "openai-compatible";
   baseUrl: string;
+  profile?: "kimi" | "deepseek" | "zai" | "xai";
   apiKeyEnv: string;
   upstreamModel: string;
   tools: boolean;
@@ -191,6 +255,7 @@ function providerConfig(provider: ProviderFixture) {
         type: provider.type,
         enabled: true,
         baseUrl: provider.baseUrl,
+        ...(provider.profile ? { profile: provider.profile } : {}),
         apiKeyEnv: provider.apiKeyEnv,
         requestTimeoutMs: 5_000,
         maxRetries: 0,

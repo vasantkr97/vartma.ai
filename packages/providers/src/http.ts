@@ -17,7 +17,8 @@ export interface SseMessage {
 
 export interface HttpProviderOptions {
   name: string;
-  apiKey: string;
+  apiKey?: string;
+  authentication?: "bearer" | "none";
   models: ModelDefinition[];
   baseUrl: string;
   requestTimeoutMs?: number;
@@ -29,6 +30,7 @@ export interface HttpProviderOptions {
 export interface ResolvedHttpProviderOptions {
   name: string;
   apiKey: string;
+  authentication: "bearer" | "none";
   models: ModelDefinition[];
   baseUrl: string;
   requestTimeoutMs: number;
@@ -63,7 +65,8 @@ export function resolveHttpProviderOptions(
   if (!options.name.trim()) {
     throw new Error("Provider name must not be empty.");
   }
-  if (!options.apiKey.trim()) {
+  const authentication = options.authentication ?? "bearer";
+  if (authentication === "bearer" && !options.apiKey?.trim()) {
     throw new Error(`Provider "${options.name}" requires a non-empty API key.`);
   }
   if (options.models.length === 0) {
@@ -77,7 +80,8 @@ export function resolveHttpProviderOptions(
 
   return {
     name: options.name,
-    apiKey: options.apiKey,
+    apiKey: options.apiKey?.trim() ?? "",
+    authentication,
     models: options.models.map((model) => ({ ...model })),
     baseUrl,
     requestTimeoutMs: options.requestTimeoutMs ?? 120_000,
@@ -396,7 +400,7 @@ async function providerHttpError(
 ): Promise<ProviderError> {
   let errorBody: ErrorBody = {};
   try {
-    const body = await response.json();
+    const body: unknown = await response.json();
     if (isRecord(body)) {
       const nested = isRecord(body["error"]) ? body["error"] : body;
       errorBody = {

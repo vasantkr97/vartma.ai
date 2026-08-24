@@ -36,6 +36,9 @@ model Session {
   successfulOutcomes  Int    @default(0)
   lastEscalatedAt     DateTime?
   cooldownUntil       DateTime?
+  lastProgressFingerprint String?
+  automaticStuckUntil DateTime?
+  automaticEscalationLevel Int @default(0)
   accumulatedCost   Decimal  @default(0) @db.Decimal(20, 10)
   inputTokens        BigInt   @default(0)
   cachedInputTokens  BigInt   @default(0)
@@ -49,6 +52,7 @@ model Session {
   outcomes SessionOutcome[]
 
   @@index([lastActivityAt])
+  @@index([automaticStuckUntil])
 }
 
 model Request {
@@ -236,4 +240,73 @@ model ModelHealthSample {
   observedAt  DateTime @default(now())
 
   @@index([provider, model, observedAt])
+}
+
+model CanonicalTranscript {
+  sessionId         String   @id
+  payload           String   @db.Text
+  messageCount      Int
+  encryptionVersion Int      @default(1)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([updatedAt])
+}
+
+model EvaluationRun {
+  id                    String   @id
+  dataset               String
+  datasetVersion        String
+  harnessVersion        String
+  promptTemplateVersion String
+  timeoutMs             Int
+  maxAttempts           Int
+  cacheEnabled          Boolean
+  maxOutputTokens       Int
+  targetKind            String
+  targetValue           String
+  startedAt             DateTime @default(now())
+  completedAt           DateTime
+
+  results EvaluationTaskResult[]
+
+  @@index([dataset, datasetVersion, startedAt])
+  @@index([targetKind, targetValue, startedAt])
+}
+
+model EvaluationTaskResult {
+  id                    String        @id @default(uuid())
+  runId                 String
+  run                   EvaluationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  taskId                String
+  taskClass             String
+  selectedModel         String
+  success               Boolean
+  attempts              Int
+  latencyMs             Int
+  actualCost            Decimal       @db.Decimal(24, 12)
+  inputTokens           Int
+  cachedInputTokens     Int
+  outputTokens          Int
+  reasoningTokens       Int
+  completedAt           DateTime
+
+  @@unique([runId, taskId])
+  @@index([selectedModel, taskClass, completedAt])
+  @@index([success, completedAt])
+}
+
+model RouterConfigurationSnapshot {
+  id                String   @id @default(uuid())
+  configurationHash String   @unique
+  environment       String
+  routerVersion     String
+  priceBookVersion  String
+  payload           Json
+  active            Boolean  @default(true)
+  activatedAt       DateTime @default(now())
+  createdAt         DateTime @default(now())
+
+  @@index([active, activatedAt])
+  @@index([routerVersion, createdAt])
 }

@@ -9,6 +9,27 @@ Both endpoints use the same authentication, canonical request, task classifier, 
 session state, route explanation, fallback budget, circuit breakers, attempt ledger, and response
 headers as `/v1/messages`.
 
+### Configure an OpenAI-compatible coding client
+
+Vartma can safely manage the three standard dotenv values used by OpenAI-compatible clients:
+
+```sh
+vartma configure openai --config ./vartma.yaml --env-path ./.env --mode balanced
+```
+
+This writes `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL`, while preserving unrelated
+dotenv entries. Before the first change it creates a permission-restricted baseline backup and a
+secret-free ownership record. `vartma status --openai-env-path ./.env` reports whether the managed
+values are active or were changed outside Vartma. Restore only Vartma-managed values with:
+
+```sh
+vartma configure openai --undo --env-path ./.env
+```
+
+`vartma uninstall --openai-env-path ./.env` performs the same restoration as part of a complete
+local client disconnect. Backups are retained deliberately. The backup can contain the original
+dotenv secrets and must remain private.
+
 ### Responses API
 
 ```sh
@@ -98,6 +119,69 @@ The adapter translates:
 Compatibility servers vary. Run conformance checks against every exact server/model version before
 enabling it in routing.
 
+### Named compatible provider profiles
+
+For APIs that implement the OpenAI Chat Completions protocol, set `type: openai-compatible` and one
+of the built-in profiles. The profile supplies the official endpoint dialect; the operator still
+declares exact model IDs, measured capabilities, limits, and current prices:
+
+| Family              | Profile    | Default API root                     | Chat path              |
+| ------------------- | ---------- | ------------------------------------ | ---------------------- |
+| Kimi / Moonshot     | `kimi`     | `https://api.moonshot.ai`            | `/v1/chat/completions` |
+| DeepSeek            | `deepseek` | `https://api.deepseek.com`           | `/chat/completions`    |
+| GLM / Z.ai          | `zai`      | `https://api.z.ai/api/paas/v4`       | `/chat/completions`    |
+| Grok / xAI          | `xai`      | `https://api.x.ai`                   | `/v1/chat/completions` |
+| Ollama              | `ollama`   | `http://127.0.0.1:11434`             | `/v1/chat/completions` |
+| vLLM / other server | `generic`  | required operator-supplied `baseUrl` | configurable           |
+
+The Ollama profile defaults to `authentication: none`. A generic local vLLM-compatible server can
+also opt out of bearer authentication explicitly. Hosted compatible providers default to bearer
+authentication and still require `apiKeyEnv` or an encrypted `credentialRef`.
+
+```yaml
+authentication: none
+```
+
+Example provider definition:
+
+```yaml
+id: deepseek
+type: openai-compatible
+profile: deepseek
+enabled: true
+apiKeyEnv: DEEPSEEK_API_KEY
+models:
+  - id: deepseek/v4-flash
+    provider: deepseek
+    upstreamModel: deepseek-v4-flash
+    enabled: true
+    capabilities:
+      text: true
+      vision: false
+      streaming: true
+      tools: true
+      structuredOutput: true
+      reasoning: true
+    contextWindow: 1000000
+    maxOutputTokens: 384000
+    qualityTier: 3
+    expectedLatencyTier: 2
+    pricing:
+      currency: USD
+      effectiveFrom: 2026-04-24
+      verifiedAt: 2026-08-24
+      source: https://api-docs.deepseek.com/quick_start/pricing
+      inputPerMillion: 0.14
+      cachedInputPerMillion: 0.0028
+      outputPerMillion: 0.28
+```
+
+Add it with `vartma provider add ./deepseek.yaml`, then store its key with
+`vartma login deepseek --from-env DEEPSEEK_API_KEY`. Current official references confirm
+DeepSeek's `/chat/completions`, Z.ai's `/chat/completions`, xAI's `/v1/chat/completions`, and
+Ollama's compatible `/v1/chat/completions` surfaces. Recheck provider documentation before every
+price-book update because aliases, limits, and prices can change independently of Vartma.
+
 The automated participation test starts a real local HTTP compatibility endpoint, routes a request
 through the gateway, and verifies that a tools-required request is rejected before the
 tools-disabled upstream is contacted.
@@ -171,3 +255,7 @@ official OpenAI Node SDK.
 - <https://ai.google.dev/gemini-api/docs/latest-model>
 - <https://ai.google.dev/gemini-api/docs/pricing>
 - <https://docs.vllm.ai/en/latest/serving/online_serving/openai_compatible_server/>
+- <https://api-docs.deepseek.com/guides/function_calling/>
+- <https://docs.z.ai/api-reference/llm/chat-completion>
+- <https://docs.x.ai/developers/rest-api-reference/inference/chat>
+- <https://docs.ollama.com/api/openai-compatibility>

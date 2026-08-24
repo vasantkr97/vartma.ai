@@ -1,0 +1,22 @@
+dataset: vartma-public-smoke
+datasetVersion: "1.0.0"
+harnessVersion: vartma-langgraph-agent-v1
+promptTemplateVersion: coding-agent-v1
+timeoutMs: 300000
+maxAttempts: 3
+cacheEnabled: true
+maxAgentTurns: 20
+maxOutputTokens: 4096
+
+tasks:
+  - id: javascript-addition-repair
+    taskClass: test_repair
+    fixture: ../fixtures/javascript-addition-repair
+    prompt: Fix the implementation so every test in test.mjs passes. Preserve the exported API.
+    allowedCommands:
+      - node
+    verify:
+      - command: node
+        args:
+          - test.mjs
+        timeoutMs: 10000

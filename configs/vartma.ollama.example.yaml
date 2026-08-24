@@ -1,0 +1,59 @@
+environment: development
+
+server:
+  host: 127.0.0.1
+  port: 8080
+  trustProxy: false
+  requestBodyLimitBytes: 10485760
+
+auth:
+  enabled: false
+  apiKeys: []
+
+database:
+  url: postgresql://vartma:vartma@localhost:5432/vartma?schema=public
+  requiredForReadiness: false
+
+routing:
+  defaultMode: fixed
+  defaultModel: ollama/qwen2.5-7b
+  baselineModel: ollama/qwen2.5-7b
+  routerVersion: local-ollama-v1
+  priceBookVersion: local-zero-cost-v1
+
+providers:
+  - id: ollama
+    type: openai-compatible
+    profile: ollama
+    enabled: true
+    requestTimeoutMs: 300000
+    maxRetries: 1
+    models:
+      # Replace both names if this model is not installed (`ollama list`).
+      - id: ollama/qwen2.5-7b
+        provider: ollama
+        upstreamModel: qwen2.5:7b
+        enabled: true
+        capabilities:
+          text: true
+          vision: false
+          streaming: true
+          tools: true
+          structuredOutput: true
+          reasoning: false
+        contextWindow: 32768
+        maxOutputTokens: 8192
+        qualityTier: 2
+        expectedLatencyTier: 4
+        pricing:
+          currency: USD
+          effectiveFrom: 2026-08-24
+          verifiedAt: 2026-08-24
+          source: operator-owned local Ollama inference
+          inputPerMillion: 0
+          cachedInputPerMillion: 0
+          outputPerMillion: 0
+
+telemetry:
+  serviceName: vartma-gateway
+  logLevel: info

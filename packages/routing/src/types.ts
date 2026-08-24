@@ -6,6 +6,8 @@ import type {
   TokenEstimate,
 } from "@vartma/canonical";
 
+import type { ProgressAssessment } from "./progress.js";
+
 export const TASK_CLASSES = [
   "explanation",
   "code_generation",
@@ -36,6 +38,7 @@ export interface TaskSignals {
   turnCount: number;
   previousToolErrors: number;
   previousTestFailures: number;
+  progress: ProgressAssessment;
   matchedRules: string[];
 }
 
@@ -84,6 +87,11 @@ export interface CandidateFilterReason {
 
 export interface CandidateScore {
   expectedSuccess: number;
+  expectedAttempts: number;
+  expectedTotalCostUsd: number;
+  switchColdInputCostUsd: number;
+  calibrationSource: "task_evaluation" | "model_evaluation" | "quality_prior";
+  calibrationSampleSize: number;
   normalizedCost: number;
   normalizedLatency: number;
   failureRisk: number;

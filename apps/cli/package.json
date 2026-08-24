@@ -1,20 +1,66 @@
 {
   "name": "@vartma/cli",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
     "vartma": "./dist/index.js"
   },
+  "files": [
+    "dist/**/*.js"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -b",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "prepack": "npm --prefix ../.. run build && node ../../scripts/prepare-cli-package.mjs",
+    "postpack": "node ../../scripts/prepare-cli-package.mjs --clean"
   },
   "dependencies": {
-    "@vartma/config": "*",
-    "@vartma/database": "*",
-    "@vartma/gateway": "*",
-    "commander": "latest"
-  }
+    "@langchain/langgraph": "^1.4.12",
+    "@opentelemetry/api": "latest",
+    "@prisma/adapter-pg": "^7.0.0",
+    "@prisma/client": "^7.0.0",
+    "@vartma/canonical": "0.1.0",
+    "@vartma/config": "0.1.0",
+    "@vartma/console": "0.1.0",
+    "@vartma/database": "0.1.0",
+    "@vartma/evals": "0.1.0",
+    "@vartma/gateway": "0.1.0",
+    "@vartma/providers": "0.1.0",
+    "@vartma/routing": "0.1.0",
+    "commander": "latest",
+    "express": "latest",
+    "pg": "latest",
+    "pino": "latest",
+    "pino-http": "latest",
+    "yaml": "latest",
+    "zod": "latest"
+  },
+  "bundledDependencies": [
+    "@vartma/canonical",
+    "@vartma/config",
+    "@vartma/console",
+    "@vartma/database",
+    "@vartma/evals",
+    "@vartma/gateway",
+    "@vartma/providers",
+    "@vartma/routing"
+  ],
+  "bundleDependencies": [
+    "@vartma/canonical",
+    "@vartma/config",
+    "@vartma/console",
+    "@vartma/database",
+    "@vartma/evals",
+    "@vartma/gateway",
+    "@vartma/providers",
+    "@vartma/routing"
+  ]
 }

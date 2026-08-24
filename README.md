@@ -22,7 +22,11 @@ Phases 1 through 6 currently provide:
 - Capability, policy, health, context, output-size, region, latency, and cost filters.
 - Explainable route decisions persisted with every provider attempt.
 - Session model stickiness with configurable switch hysteresis.
+- Loss-controlled long-transcript compression that retains requirements, decisions, failures,
+  mutations, and the recent working set.
 - Outcome-driven escalation and cooldown-based de-escalation.
+- Transcript-derived stuck detection with content-safe fingerprints, deduplication, and expiring
+  automatic escalation.
 - Bounded, deadline-aware cross-provider fallback before visible output.
 - Per-model and per-provider circuit breakers with half-open recovery.
 - Persisted fallback attempts, route-switch reasons, session outcomes, and accumulated session cost
@@ -51,17 +55,43 @@ Phases 1 through 6 currently provide:
   bounded gateway readiness, and Claude Code state without secret-bearing fields.
 - Retry-inclusive immutable usage events, declared fixed baselines, versioned price evidence, and
   authenticated aggregate/per-request cost and savings APIs.
+- Versioned task/model evaluation calibration and expected cost-per-success routing that includes
+  retries and model-switch cold-context cost.
+- A same-origin React operator console for provider/model health, sessions, routing distribution,
+  spend, failures, savings, and evaluation coverage.
 
 The complete product plan is in
 [VARTMA_PRODUCT_BUILD_PLAN.md](./VARTMA_PRODUCT_BUILD_PLAN.md).
 Operator CLI details are in [docs/vartma.md](./docs/vartma.md).
 Usage and savings semantics are in [docs/usage-analytics.md](./docs/usage-analytics.md).
+Evaluation and calibration are in
+[docs/evaluation-and-calibration.md](./docs/evaluation-and-calibration.md).
 
 ## Requirements
 
 - Node.js 22 or newer.
 - npm 10 or newer.
 - Docker Desktop for the local PostgreSQL service.
+
+## Install the CLI
+
+The publishable package is self-contained and bundles Vartma's internal gateway, router, provider,
+evaluation, database, and React console workspaces:
+
+```sh
+npm install --global @vartma/cli
+vartma --help
+```
+
+Until an npm release is published, create and install the identical release artifact locally:
+
+```sh
+npm pack ./apps/cli
+npm install --global ./vartma-cli-0.1.0.tgz
+```
+
+`npm run smoke:clean-install` packs the CLI, installs it into an isolated prefix, and verifies the
+installed executable without relying on monorepo workspace links.
 
 ## Setup
 
@@ -81,6 +111,10 @@ On macOS or Linux, replace `copy` with `cp`.
 ```sh
 npm run dev:gateway
 ```
+
+Open `http://127.0.0.1:8080/console/` for the operator console. Enter the configured router API key
+in the session-only credential field. Static console assets are public, while every operational API
+remains protected by normal router authentication and returns metadata only.
 
 The example configuration listens on `127.0.0.1:8080`, uses the development API key
 `local-development-key`, and keeps the live providers disabled until their keys are configured.
@@ -164,14 +198,34 @@ npm run vartma -- config undo
 npm run vartma -- doctor --config ./vartma.yaml
 npm run vartma -- models --json
 npm run vartma -- provider test
+npm run vartma -- provider conformance <provider-id> --json
+npm run vartma -- start
+npm run vartma -- stop
 npm run vartma -- trace <request-id>
 npm run vartma -- sessions --limit 20
+npm run vartma -- eval summarize ./results.jsonl
+npm run vartma -- eval calibrate ./results.jsonl --calibration-version eval-v1 --output ./calibration.json --apply
 npm run vartma -- serve
 npm run vartma -- configure claude-code --mode balanced
+npm run vartma -- configure openai --env-path ./.env --mode balanced
 npm run vartma -- status
 npm run vartma -- bypass on
 npm run vartma -- bypass off
+npm run vartma -- uninstall
 ```
+
+For a zero-provider-cost local test, install an Ollama model and use the included configuration.
+Ollama defaults to unauthenticated local access, so no dummy API key is required:
+
+```sh
+npm run config:validate -- --config ./configs/vartma.ollama.example.yaml
+npm run vartma -- provider conformance ollama --config ./configs/vartma.ollama.example.yaml --timeout 300000 --json
+npm run vartma -- serve --config ./configs/vartma.ollama.example.yaml
+```
+
+The example names `qwen2.5:7b`; update its model ID and `upstreamModel` if `ollama list` shows a
+different installed model. Generic OpenAI-compatible/vLLM definitions may set
+`authentication: none`; hosted compatible services remain bearer-authenticated by default.
 
 Commands use `./vartma.yaml` by default; `--config` and `VARTMA_CONFIG_PATH` override it.
 Claude Code project settings are the default scope. See
@@ -180,6 +234,9 @@ and protocol limitations.
 
 See [docs/openai-and-gemini.md](./docs/openai-and-gemini.md) for OpenAI client examples, Gemini
 configuration, local/vLLM setup, and compatibility boundaries.
+
+See the [completion audit](./docs/completion-audit.md) for requirement-by-requirement evidence and
+the external provider/benchmark proof that is still required before declaring parity complete.
 
 ## Quality commands
 
@@ -191,11 +248,61 @@ npm run lint
 npm run format:check
 npm run prisma:validate
 npm run smoke:claude-code
+npm run smoke:load
+npm run smoke:clean-install
+npm audit --audit-level=high
+npm audit --omit=dev --audit-level=high
 ```
+
+For a containerized local gateway with PostgreSQL and migrations:
+
+```sh
+export POSTGRES_PASSWORD='replace-with-a-generated-database-secret'
+export VARTMA_DATABASE_URL='postgresql://vartma:replace-with-a-url-encoded-secret@postgres:5432/vartma?schema=public'
+export VARTMA_MASTER_KEY='replace-with-a-long-random-master-key'
+export VARTMA_API_KEYS='replace-with-a-generated-gateway-key'
+docker compose up --build --wait
+```
+
+PowerShell uses `$env:NAME = "value"` for the same variables. Compose fails closed when any
+required deployment secret is absent; the repository does not contain a working production
+password or gateway key.
+
+Compose waits for PostgreSQL, applies checked-in Prisma migrations in a one-shot service, then
+starts the production-dependency-only gateway image on port 8080. Provider keys and
+`VARTMA_MASTER_KEY` should be supplied through your deployment secret mechanism when live providers
+or encrypted transcripts are enabled.
 
 ## Configuration rules
 
 - Provider API keys must be supplied through environment or secret storage.
+- For encrypted BYOK storage, set a master passphrase of at least 20 characters outside the
+  repository and run `vartma login <provider-id>`:
+
+  ```powershell
+  $env:VARTMA_MASTER_KEY = "use-a-long-random-master-passphrase"
+  $env:OPENAI_API_KEY = "your-provider-key"
+  vartma login openai --from-env OPENAI_API_KEY --config ./vartma.yaml
+  ```
+
+  Vartma derives an AES-256-GCM key with scrypt, authenticates the encrypted store on every read,
+  keeps the master key outside configuration, and gives an encrypted credential reference
+  precedence over the provider's environment-variable fallback. The `.vartma/` store is ignored by
+  Git; back it up as sensitive encrypted data and supply the master key through your deployment
+  secret manager.
+
+- Run the checked-in LangGraph coding-agent evaluation harness against fixed and routed targets:
+
+  ```sh
+  vartma eval run ./evals/suites/smoke.yaml --target fixed:<model-id> --output fixed.jsonl
+  vartma eval run ./evals/suites/smoke.yaml --target router:balanced --output balanced.jsonl
+  ```
+
+  The harness operates on disposable fixture copies, restricts agent commands to the suite's
+  allowlist, runs verifier commands without a shell, and records actual retry-inclusive gateway
+  usage. Runs are also persisted transactionally in configured PostgreSQL unless `--no-persist` is
+  supplied. See [evaluation and calibration](./docs/evaluation-and-calibration.md).
+
 - Prompt content is not logged by default.
 - LangSmith export is disabled by default.
 - A configured model ID is distinct from the provider's upstream model name.
@@ -207,11 +314,12 @@ npm run smoke:claude-code
 
 ## Current boundary
 
-The working router milestone now covers Claude Code, OpenAI Responses/Chat clients, Anthropic,
-OpenAI, Gemini, and generic/local Chat-Completions-compatible upstreams. Phase 7 completes the
-operator CLI with provider tests, model/mode management, trace/session inspection, and
-cross-platform packaging.
+The router covers Claude Code and OpenAI-compatible coding clients; native Anthropic, OpenAI, and
+Gemini upstreams; and Kimi, DeepSeek, Z.ai/GLM, xAI/Grok, Ollama, vLLM, and other compatible
+Chat-Completions upstreams. Provider-specific model IDs, prices, limits, and capabilities remain
+operator configuration and must be validated against the exact account and endpoint in use.
 
 LangChain is not in the critical provider path because it would obscure protocol details the router
-must preserve. LangGraph and LangSmith remain available for later evaluation workflows and optional
-redacted trace export, where they add value without becoming gateway dependencies.
+must preserve. LangGraph powers the repeatable evaluation agent workflow, where explicit
+model/tool/verification states are useful. The streaming gateway hot path remains deterministic
+TypeScript. LangSmith is optional and is not required to run the router.

@@ -1,6 +1,7 @@
 import type { CanonicalContent, CanonicalRequest, TokenEstimate } from "@vartma/canonical";
 
 import type { TaskClass, TaskClassification, TaskSignals } from "./types.js";
+import { analyzeProgress } from "./progress.js";
 
 interface Rule {
   taskClass: TaskClass;
@@ -89,17 +90,17 @@ export function classifyTask(
   request: CanonicalRequest,
   estimate: TokenEstimate,
 ): TaskClassification {
-  const prompt = request.messages
+  const latestUserIndex = request.messages.findLastIndex((message) => message.role === "user");
+  const currentTurnMessages = request.messages.slice(Math.max(0, latestUserIndex));
+  const prompt = currentTurnMessages
     .flatMap((message) => message.content)
-    .filter((content): content is Extract<CanonicalContent, { type: "text" }> =>
-      Boolean(content.type === "text"),
-    )
-    .map((content) => content.text)
+    .flatMap(classificationText)
     .join("\n");
   const fileCount = metadataInteger(request, "file_count");
   const turnCount = metadataInteger(request, "turn_count");
   const previousToolErrors = metadataInteger(request, "previous_tool_errors");
   const previousTestFailures = metadataInteger(request, "previous_test_failures");
+  const progress = analyzeProgress(request);
   const hasImages = request.messages.some((message) =>
     message.content.some((content) => content.type === "image"),
   );
@@ -135,9 +136,18 @@ export function classifyTask(
     confidence = 0.9;
     matchedRules.push("large autonomous scope");
   }
-  if (previousToolErrors >= 2 || previousTestFailures >= 2) {
+  if (
+    previousToolErrors >= 2 ||
+    previousTestFailures >= 2 ||
+    progress.toolErrors >= 2 ||
+    progress.testFailures >= 2
+  ) {
     difficulty = Math.min(5, difficulty + 1) as 1 | 2 | 3 | 4 | 5;
     matchedRules.push("prior failures");
+  }
+  if (progress.status === "stuck") {
+    difficulty = Math.min(5, difficulty + 1) as 1 | 2 | 3 | 4 | 5;
+    matchedRules.push("transcript progress stalled");
   }
 
   const signals: TaskSignals = {
@@ -150,9 +160,26 @@ export function classifyTask(
     turnCount,
     previousToolErrors,
     previousTestFailures,
+    progress,
     matchedRules,
   };
   return { taskClass, difficulty, confidence, signals };
+}
+
+function classificationText(content: CanonicalContent): string[] {
+  switch (content.type) {
+    case "text":
+      return [content.text];
+    case "tool_result":
+      return typeof content.content === "string"
+        ? [content.content]
+        : content.content.flatMap(classificationText);
+    case "tool_call":
+      return [content.name];
+    case "image":
+    case "reasoning":
+      return [];
+  }
 }
 
 function metadataInteger(request: CanonicalRequest, key: string): number {

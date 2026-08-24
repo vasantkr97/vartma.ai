@@ -1,6 +1,12 @@
 import { resolve } from "node:path";
 
-import { loadConfig, type RouterConfig } from "@vartma/config";
+import {
+  providerRequiresCredential,
+  loadConfig,
+  readEncryptedCredential,
+  resolveCredentialStorePath,
+  type RouterConfig,
+} from "@vartma/config";
 
 import {
   claudeCodeStatus,
@@ -8,12 +14,14 @@ import {
   type ClaudeCodeStatus,
   type ClaudeSettingsLocationOptions,
 } from "./claude-code-settings.js";
+import { openAIClientStatus, type OpenAIClientStatus } from "./openai-client-settings.js";
 
 export interface OperatorStatusDependencies {
   environment?: NodeJS.ProcessEnv;
   fetchImplementation?: typeof fetch;
   loadConfigImplementation?: typeof loadConfig;
   claudeStatusImplementation?: typeof claudeCodeStatus;
+  openAIStatusImplementation?: typeof openAIClientStatus;
   now?: () => Date;
 }
 
@@ -39,6 +47,7 @@ export interface OperatorStatusReport {
           enabled: boolean;
           enabledModelCount: number;
           credentialEnvironment?: string;
+          credentialReference?: string;
           credentialPresent: boolean;
         }>;
       }
@@ -64,12 +73,20 @@ export interface OperatorStatusReport {
     gatewayUrl?: string;
     mode?: string;
   };
+  openAIClient: {
+    configured: boolean;
+    state: OpenAIClientStatus["state"];
+    envPath: string;
+    gatewayUrl?: string;
+    model?: string;
+  };
 }
 
 export async function runOperatorStatus(
   options: {
     configPath: string;
     claudeLocation: ClaudeSettingsLocationOptions;
+    openAIEnvPath: string;
     timeoutMs: number;
     offline: boolean;
   },
@@ -77,7 +94,7 @@ export async function runOperatorStatus(
 ): Promise<OperatorStatusReport> {
   const configPath = resolve(options.configPath);
   const now = dependencies.now?.() ?? new Date();
-  const [configuration, claude] = await Promise.all([
+  const [configuration, claude, openAI] = await Promise.all([
     loadStatusConfiguration(
       configPath,
       dependencies.loadConfigImplementation ?? loadConfig,
@@ -87,8 +104,13 @@ export async function runOperatorStatus(
       dependencies.claudeStatusImplementation ?? claudeCodeStatus,
       options.claudeLocation,
     ),
+    safeOpenAIStatus(
+      dependencies.openAIStatusImplementation ?? openAIClientStatus,
+      options.openAIEnvPath,
+    ),
   ]);
   const claudeSummary = summarizeClaudeStatus(claude);
+  const openAISummary = summarizeOpenAIStatus(openAI);
 
   if (configuration.state !== "valid") {
     return {
@@ -97,6 +119,7 @@ export async function runOperatorStatus(
       configuration,
       gateway: { state: "skipped", reason: "configuration_unavailable" },
       claudeCode: claudeSummary,
+      openAIClient: openAISummary,
     };
   }
 
@@ -116,11 +139,13 @@ export async function runOperatorStatus(
     ok:
       gateway.state !== "not_ready" &&
       gateway.state !== "unreachable" &&
-      claudeSummary.state !== "drifted",
+      claudeSummary.state !== "drifted" &&
+      openAISummary.state !== "drifted",
     generatedAt: now.toISOString(),
     configuration: reportConfiguration,
     gateway,
     claudeCode: claudeSummary,
+    openAIClient: openAISummary,
   };
 }
 
@@ -147,7 +172,13 @@ export function formatOperatorStatus(report: OperatorStatusReport): string {
     (report.claudeCode.gatewayUrl
       ? `Claude gateway: ${report.claudeCode.gatewayUrl}\nClaude mode: ${report.claudeCode.mode ?? "unknown"}\n`
       : "");
-  return `${configuration}${gateway}${claude}Status result: ${report.ok ? "PASS" : "FAIL"}\n`;
+  const openAI =
+    `OpenAI-compatible client: ${report.openAIClient.state}\n` +
+    `OpenAI dotenv: ${report.openAIClient.envPath}\n` +
+    (report.openAIClient.gatewayUrl
+      ? `OpenAI gateway: ${report.openAIClient.gatewayUrl}\nOpenAI model: ${report.openAIClient.model ?? "unknown"}\n`
+      : "");
+  return `${configuration}${gateway}${claude}${openAI}Status result: ${report.ok ? "PASS" : "FAIL"}\n`;
 }
 
 async function loadStatusConfiguration(
@@ -195,11 +226,36 @@ function summarizeConfiguration(
         ? provider.models.filter((model) => model.enabled).length
         : 0,
       ...(provider.apiKeyEnv ? { credentialEnvironment: provider.apiKeyEnv } : {}),
+      ...(provider.credentialRef ? { credentialReference: provider.credentialRef } : {}),
       credentialPresent:
         provider.type === "fake" ||
+        !providerRequiresCredential(provider) ||
+        encryptedCredentialPresent(path, config, provider, environment) ||
         Boolean(provider.apiKeyEnv && environment[provider.apiKeyEnv]?.trim()),
     })),
   };
+}
+
+function encryptedCredentialPresent(
+  configPath: string,
+  config: RouterConfig,
+  provider: RouterConfig["providers"][number],
+  environment: NodeJS.ProcessEnv,
+): boolean {
+  if (!provider.credentialRef) return false;
+  const masterKey = environment[config.credentials.masterKeyEnv];
+  if (!masterKey) return false;
+  try {
+    return Boolean(
+      readEncryptedCredential({
+        path: resolveCredentialStorePath(configPath, config.credentials.storePath),
+        masterKey,
+        reference: provider.credentialRef,
+      }),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function summarizeClaudeStatus(status: ClaudeCodeStatus): OperatorStatusReport["claudeCode"] {
@@ -209,6 +265,16 @@ function summarizeClaudeStatus(status: ClaudeCodeStatus): OperatorStatusReport["
     settingsPath: status.settingsPath,
     ...(status.gatewayUrl ? { gatewayUrl: status.gatewayUrl } : {}),
     ...(status.mode ? { mode: status.mode } : {}),
+  };
+}
+
+function summarizeOpenAIStatus(status: OpenAIClientStatus): OperatorStatusReport["openAIClient"] {
+  return {
+    configured: status.configured,
+    state: status.state,
+    envPath: status.envPath,
+    ...(status.gatewayUrl ? { gatewayUrl: status.gatewayUrl } : {}),
+    ...(status.model ? { model: status.model } : {}),
   };
 }
 
@@ -223,6 +289,22 @@ async function safeClaudeStatus(
       configured: true,
       state: "drifted",
       settingsPath: resolveClaudeSettingsPath(location),
+      statePath: "",
+    };
+  }
+}
+
+async function safeOpenAIStatus(
+  implementation: typeof openAIClientStatus,
+  envPath: string,
+): Promise<OpenAIClientStatus> {
+  try {
+    return await implementation({ envPath });
+  } catch {
+    return {
+      configured: true,
+      state: "drifted",
+      envPath: resolve(envPath),
       statePath: "",
     };
   }

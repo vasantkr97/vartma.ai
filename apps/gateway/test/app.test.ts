@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 
 import type { RouterConfig } from "@vartma/config";
 import { routerConfigSchema } from "@vartma/config";
+import type { EvaluationStore, InspectionStore } from "@vartma/database";
 import type {
   CanonicalEvent,
   CanonicalRequest,
@@ -19,6 +20,7 @@ import {
   ProviderRegistry,
   type ProviderAdapter,
 } from "@vartma/providers";
+import { InMemoryCanonicalHistoryStore } from "@vartma/routing";
 import pino from "pino";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
@@ -126,6 +128,144 @@ describe("gateway", () => {
     const response = await request(app()).get("/healthz");
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ status: "ok" });
+  });
+
+  it("serves the React operator console without exposing API data anonymously", async () => {
+    const gateway = app();
+    const consoleResponse = await request(gateway).get("/console/");
+    expect(consoleResponse.status).toBe(200);
+    expect(consoleResponse.text).toContain("Vartma.ai Router Console");
+
+    expect((await request(gateway).get("/vartma/v1/config-summary")).status).toBe(401);
+    const summary = await request(gateway)
+      .get("/vartma/v1/config-summary")
+      .set("x-api-key", "test-api-key");
+    expect(summary.status).toBe(200);
+    expect(summary.body).toMatchObject({
+      defaultMode: "balanced",
+      defaultModel: "fake/default",
+      calibration: { version: "uncalibrated" },
+      providers: [{ id: "fake", credentialPresent: true }],
+    });
+    expect(JSON.stringify(summary.body)).not.toContain("test-api-key");
+  });
+
+  it("lists recent metadata-only sessions for the operator console", async () => {
+    const gateway = routingApp();
+    await request(gateway)
+      .post("/v1/messages")
+      .set("x-api-key", "test-api-key")
+      .set("x-vartma-session-id", "console-session")
+      .send(baseRequest());
+
+    const response = await request(gateway)
+      .get("/vartma/v1/sessions?limit=10")
+      .set("x-api-key", "test-api-key");
+    expect(response.status).toBe(200);
+    expect(response.body.sessions).toEqual([
+      expect.objectContaining({ id: "console-session", turnCount: 1 }),
+    ]);
+    expect(JSON.stringify(response.body)).not.toContain("hello router");
+  });
+
+  it("lists redacted routing and failure summaries for the operator console", async () => {
+    const inspectionStore: InspectionStore = {
+      trace: () => Promise.resolve(undefined),
+      sessions: () => Promise.resolve([]),
+      session: () => Promise.resolve(undefined),
+      requests: (limit, failuresOnly) => {
+        expect(limit).toBe(25);
+        expect(failuresOnly).toBe(true);
+        return Promise.resolve([
+          {
+            id: "request-console",
+            sessionId: "session-console",
+            routingMode: "balanced",
+            status: "FAILED",
+            selectedProvider: "deepseek",
+            selectedModel: "deepseek/reasoner",
+            taskClass: "debugging",
+            explanation: "Selected the lowest expected cost per successful attempt.",
+            selectedReasons: ["Measured success fit"],
+            attemptCount: 2,
+            fallbackCount: 1,
+            startedAt: "2026-08-24T00:00:00.000Z",
+            completedAt: "2026-08-24T00:00:01.000Z",
+            errorType: "timeout",
+            errorMessage: "Upstream timed out.",
+          },
+        ]);
+      },
+    };
+    const gateway = createApp({
+      config: testConfig(),
+      logger: pino({ level: "silent" }),
+      inspectionStore,
+    });
+    const response = await request(gateway)
+      .get("/vartma/v1/requests?limit=25&failures_only=true")
+      .set("x-api-key", "test-api-key");
+    expect(response.status).toBe(200);
+    expect(response.body.requests).toEqual([
+      expect.objectContaining({
+        id: "request-console",
+        taskClass: "debugging",
+        fallbackCount: 1,
+        errorType: "timeout",
+      }),
+    ]);
+    expect(
+      (
+        await request(gateway)
+          .get("/vartma/v1/requests?failures_only=maybe")
+          .set("x-api-key", "test-api-key")
+      ).status,
+    ).toBe(400);
+  });
+
+  it("lists persisted evaluation runs for the operator console", async () => {
+    const evaluationStore: EvaluationStore = {
+      persist: () => Promise.reject(new Error("not used")),
+      list: (limit) => {
+        expect(limit).toBe(10);
+        return Promise.resolve([
+          {
+            id: "eval-run-1",
+            dataset: "coding-public",
+            datasetVersion: "1.0.0",
+            harnessVersion: "graph-v1",
+            target: "router:balanced",
+            tasks: 20,
+            solved: 18,
+            passRate: 0.9,
+            attempts: 24,
+            actualCostUsd: "1.25",
+            p50LatencyMs: 1000,
+            p95LatencyMs: 4000,
+            routingDistribution: { "deepseek/chat": 14, "openai/frontier": 6 },
+            startedAt: "2026-08-24T00:00:00.000Z",
+            completedAt: "2026-08-24T00:05:00.000Z",
+          },
+        ]);
+      },
+    };
+    const gateway = createApp({
+      config: testConfig(),
+      logger: pino({ level: "silent" }),
+      evaluationStore,
+    });
+    const response = await request(gateway)
+      .get("/vartma/v1/evaluations?limit=10")
+      .set("x-api-key", "test-api-key");
+    expect(response.status).toBe(200);
+    expect(response.body.runs).toEqual([
+      expect.objectContaining({
+        id: "eval-run-1",
+        target: "router:balanced",
+        solved: 18,
+        actualCostUsd: "1.25",
+      }),
+    ]);
   });
 
   it("accepts Claude Code's unauthenticated connectivity probe", async () => {
@@ -634,6 +774,82 @@ describe("gateway", () => {
     expect(nextTurn.headers["x-vartma-model"]).toBe("balanced/standard");
   });
 
+  it("detects an unchanged failing tool loop and automatically escalates only once", async () => {
+    const gateway = routingApp();
+    const sessionId = "automatic-stuck-session";
+    await request(gateway)
+      .post("/v1/messages")
+      .set("x-api-key", "test-api-key")
+      .set("x-vartma-session-id", sessionId)
+      .set("x-vartma-model", "cheap/basic")
+      .send({
+        model: "client/model-hint",
+        max_tokens: 256,
+        messages: [{ role: "user", content: "Implement the authentication fix" }],
+      });
+
+    const stuckMessages = [
+      {
+        role: "user",
+        content: "Implement the authentication fix",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "tool-1", name: "run_tests", input: { suite: "auth" } }],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tool-1",
+            content: "FAIL auth.test.ts expected 200 received 500",
+            is_error: true,
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "tool-2", name: "run_tests", input: { suite: "auth" } }],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tool-2",
+            content: "FAIL auth.test.ts expected 200 received 500",
+            is_error: true,
+          },
+        ],
+      },
+    ];
+    const sendStuckTurn = () =>
+      request(gateway)
+        .post("/v1/messages")
+        .set("x-api-key", "test-api-key")
+        .set("x-vartma-session-id", sessionId)
+        .send({ model: "client/model-hint", max_tokens: 256, messages: stuckMessages });
+
+    const escalated = await sendStuckTurn();
+    expect(escalated.status).toBe(200);
+    expect(escalated.headers["x-vartma-model"]).toBe("frontier/best");
+    expect(escalated.headers["x-vartma-escalation-level"]).toBe("1");
+
+    const duplicate = await sendStuckTurn();
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.headers["x-vartma-escalation-level"]).toBe("1");
+
+    const state = await request(gateway)
+      .get(`/internal/v1/sessions/${sessionId}`)
+      .set("x-api-key", "test-api-key");
+    expect(state.body.session).toMatchObject({
+      escalationLevel: 1,
+      automaticEscalationLevel: 1,
+    });
+    expect(JSON.stringify(state.body.session)).not.toContain("auth.test.ts");
+  });
+
   it("uses Claude Code's native session header through a long tool loop", async () => {
     const gateway = routingApp();
     const sessionId = "claude-native-session";
@@ -694,6 +910,83 @@ describe("gateway", () => {
       .set("x-api-key", "test-api-key");
     expect(state.status).toBe(200);
     expect(state.body.session.turnCount).toBe(20);
+  });
+
+  it("owns tool-call history and joins a delta-only tool result to the next turn", async () => {
+    const history = new InMemoryCanonicalHistoryStore();
+    const gateway = createApp({
+      config: testConfig(),
+      runtime: routingRuntime(),
+      canonicalHistoryStore: history,
+      logger: pino({ level: "silent" }),
+    });
+    const sessionId = "owned-tool-history";
+    const first = await request(gateway)
+      .post("/v1/messages")
+      .set("x-api-key", "test-api-key")
+      .set("x-vartma-session-id", sessionId)
+      .send({
+        model: "client/model-hint",
+        max_tokens: 128,
+        messages: [{ role: "user", content: "Use a tool to inspect the file" }],
+        tools: [
+          {
+            name: "read_file",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+      });
+    expect(first.status).toBe(200);
+    const toolCallId = first.body.content[0].id as string;
+    expect(await history.get(sessionId)).toEqual([
+      { role: "user", content: [{ type: "text", text: "Use a tool to inspect the file" }] },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_call",
+            id: toolCallId,
+            name: "read_file",
+            arguments: { message: "hello from the fake provider" },
+          },
+        ],
+      },
+    ]);
+
+    const second = await request(gateway)
+      .post("/v1/messages")
+      .set("x-api-key", "test-api-key")
+      .set("x-vartma-session-id", sessionId)
+      .send({
+        model: "client/model-hint",
+        max_tokens: 128,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: toolCallId,
+                content: "export const value = 1;",
+              },
+            ],
+          },
+        ],
+      });
+    expect(second.status).toBe(200);
+    const transcript = await history.get(sessionId);
+    expect(transcript).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: [expect.objectContaining({ type: "tool_call", id: toolCallId })],
+        }),
+        expect.objectContaining({
+          role: "user",
+          content: [expect.objectContaining({ type: "tool_result", toolCallId })],
+        }),
+      ]),
+    );
   });
 
   it("returns a compatible response from a fallback model after provider outage", async () => {

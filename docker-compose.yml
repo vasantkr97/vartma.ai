@@ -2,18 +2,65 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_DB: vartma
-      POSTGRES_USER: vartma
-      POSTGRES_PASSWORD: vartma
+      POSTGRES_DB: ${POSTGRES_DB:-vartma}
+      POSTGRES_USER: ${POSTGRES_USER:-vartma}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vartma -d vartma"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 10
     volumes:
       - vartma-postgres-data:/var/lib/postgresql/data
+
+  migrate:
+    build:
+      context: .
+      dockerfile: deploy/docker/gateway.Dockerfile
+      target: build
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: ${VARTMA_DATABASE_URL:?Set VARTMA_DATABASE_URL with host postgres}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/docker/gateway.Dockerfile
+      target: runtime
+    environment:
+      VARTMA_CONFIG_PATH: /app/configs/vartma.example.yaml
+      VARTMA_HOST: 0.0.0.0
+      VARTMA_API_KEYS: ${VARTMA_API_KEYS:?Set one or more comma-separated gateway keys}
+      VARTMA_MASTER_KEY: ${VARTMA_MASTER_KEY:?Set a long random transcript master key}
+      DATABASE_URL: ${VARTMA_DATABASE_URL:?Set VARTMA_DATABASE_URL with host postgres}
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 volumes:
   vartma-postgres-data:

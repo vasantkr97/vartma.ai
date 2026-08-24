@@ -1,25 +1,34 @@
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import type { CanonicalRequest, RoutingMode } from "@vartma/canonical";
-import type { RouterConfig } from "@vartma/config";
+import { providerRequiresCredential, type RouterConfig } from "@vartma/config";
 import {
   checkDatabase,
+  PrismaEvaluationStore,
+  PrismaInspectionStore,
   PrismaUsageAnalyticsStore,
+  PrismaEncryptedCanonicalHistoryStore,
   PrismaSessionStateStore,
   type AttemptStore,
+  type EvaluationStore,
+  type InspectionStore,
   type RouterDatabase,
   type UsageAnalyticsStore,
 } from "@vartma/database";
 import { ProviderError } from "@vartma/providers";
 import {
   CircuitBreakerRegistry,
+  CanonicalHistoryCoordinator,
+  InMemoryCanonicalHistoryStore,
   InMemorySessionStateStore,
   ModelRegistry,
   RoutingEngine,
   RoutingError,
   SessionCoordinator,
   type SessionStateStore,
+  type CanonicalHistoryStore,
 } from "@vartma/routing";
 import express, {
   type ErrorRequestHandler,
@@ -54,7 +63,10 @@ export interface CreateAppOptions {
   database?: RouterDatabase;
   attemptStore?: AttemptStore;
   usageAnalyticsStore?: UsageAnalyticsStore;
+  inspectionStore?: InspectionStore;
+  evaluationStore?: EvaluationStore;
   sessionStore?: SessionStateStore;
+  canonicalHistoryStore?: CanonicalHistoryStore;
 }
 
 export function createApp(options: CreateAppOptions): Express {
@@ -80,9 +92,25 @@ export function createApp(options: CreateAppOptions): Express {
       ? new PrismaSessionStateStore(options.database)
       : new InMemorySessionStateStore());
   const sessionCoordinator = new SessionCoordinator(sessionStore, config.routing.session);
+  const canonicalHistoryStore =
+    options.canonicalHistoryStore ??
+    (options.database && process.env[config.credentials.masterKeyEnv]
+      ? new PrismaEncryptedCanonicalHistoryStore(
+          options.database,
+          process.env[config.credentials.masterKeyEnv]!,
+        )
+      : new InMemoryCanonicalHistoryStore());
+  const canonicalHistory = new CanonicalHistoryCoordinator(canonicalHistoryStore);
   const usageAnalyticsStore =
     options.usageAnalyticsStore ??
     (options.database ? new PrismaUsageAnalyticsStore(options.database) : undefined);
+  const inspectionStore =
+    options.inspectionStore ??
+    (options.database ? new PrismaInspectionStore(options.database) : undefined);
+  const evaluationStore =
+    options.evaluationStore ??
+    (options.database ? new PrismaEvaluationStore(options.database) : undefined);
+  const liveProviderNames = new Set(runtime.registry.list().map((adapter) => adapter.name));
   const circuits = new CircuitBreakerRegistry(config.routing.circuitBreaker);
   const routingEngine = new RoutingEngine({
     models: new ModelRegistry(runtime.models.values()),
@@ -90,6 +118,7 @@ export function createApp(options: CreateAppOptions): Express {
     policies: config.routing.policies,
     routerVersion: config.routing.routerVersion,
     sessionPolicy: config.routing.session,
+    calibration: config.routing.calibration,
     ...(config.routing.baselineModel ? { baselineModel: config.routing.baselineModel } : {}),
   });
   const metrics = new GatewayMetrics();
@@ -111,6 +140,13 @@ export function createApp(options: CreateAppOptions): Express {
     }),
   );
   app.use(express.json({ limit: config.server.requestBodyLimitBytes }));
+  app.use(
+    "/console",
+    express.static(fileURLToPath(new URL("../../console/dist", import.meta.url)), {
+      index: "index.html",
+      maxAge: config.environment === "production" ? "1h" : 0,
+    }),
+  );
   app.use((request, response, next) => {
     const span = tracer.startSpan("vartma.http_request", {
       attributes: {
@@ -138,6 +174,10 @@ export function createApp(options: CreateAppOptions): Express {
   });
 
   app.get("/healthz", (_request, response) => {
+    const instanceId = process.env["VARTMA_INSTANCE_ID"];
+    if (instanceId) {
+      response.setHeader("x-vartma-instance-id", instanceId);
+    }
     response.json({ status: "ok" });
   });
 
@@ -240,6 +280,135 @@ export function createApp(options: CreateAppOptions): Express {
         return;
       }
       response.json(report);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/vartma/v1/config-summary", (_request, response) => {
+    response.json({
+      environment: config.environment,
+      defaultMode: config.routing.defaultMode,
+      defaultModel: config.routing.defaultModel,
+      baselineModel: config.routing.baselineModel ?? null,
+      routerVersion: config.routing.routerVersion,
+      priceBookVersion: config.routing.priceBookVersion,
+      calibration: {
+        enabled: config.routing.calibration.enabled,
+        version: config.routing.calibration.version,
+        priorSampleSize: config.routing.calibration.priorSampleSize,
+        models: Object.fromEntries(
+          Object.entries(config.routing.calibration.models).map(([model, profile]) => [
+            model,
+            {
+              defaultSampleSize: profile.default?.sampleSize ?? 0,
+              taskSamples: Object.fromEntries(
+                Object.entries(profile.tasks).map(([task, sample]) => [
+                  task,
+                  sample?.sampleSize ?? 0,
+                ]),
+              ),
+            },
+          ]),
+        ),
+      },
+      canonicalHistory: {
+        ownedByRouter: true,
+        persistence:
+          canonicalHistoryStore instanceof PrismaEncryptedCanonicalHistoryStore
+            ? "postgresql_encrypted"
+            : "memory",
+      },
+      providers: config.providers.map((provider) => ({
+        id: provider.id,
+        type: provider.type,
+        enabled: provider.enabled,
+        profile: provider.profile ?? null,
+        credentialEnvironmentVariable: provider.apiKeyEnv ?? null,
+        credentialPresent:
+          provider.type === "fake" ||
+          !providerRequiresCredential(provider) ||
+          liveProviderNames.has(provider.id) ||
+          Boolean(provider.apiKeyEnv && process.env[provider.apiKeyEnv]?.trim()),
+        models: provider.models.map((model) => ({
+          id: model.id,
+          upstreamModel: model.upstreamModel,
+          enabled: model.enabled,
+          capabilities: model.capabilities,
+          contextWindow: model.contextWindow,
+          maxOutputTokens: model.maxOutputTokens,
+          qualityTier: model.qualityTier,
+          expectedLatencyTier: model.expectedLatencyTier,
+          pricing: model.pricing,
+        })),
+      })),
+    });
+  });
+
+  app.get("/vartma/v1/sessions", async (request, response, next) => {
+    try {
+      const rawLimit = typeof request.query["limit"] === "string" ? request.query["limit"] : "50";
+      const limit = Number(rawLimit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        throw new InputError('"limit" must be an integer between 1 and 100.');
+      }
+      response.json({ sessions: await sessionStore.list(limit) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/vartma/v1/requests", async (request, response, next) => {
+    try {
+      if (!inspectionStore) {
+        response.status(503).json({
+          type: "error",
+          error: {
+            type: "api_error",
+            message: "Request inspection requires a configured PostgreSQL store.",
+          },
+        });
+        return;
+      }
+      const rawLimit = typeof request.query["limit"] === "string" ? request.query["limit"] : "50";
+      const limit = Number(rawLimit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        throw new InputError('"limit" must be an integer between 1 and 100.');
+      }
+      const rawFailuresOnly = request.query["failures_only"];
+      if (
+        rawFailuresOnly !== undefined &&
+        rawFailuresOnly !== "true" &&
+        rawFailuresOnly !== "false"
+      ) {
+        throw new InputError('"failures_only" must be "true" or "false".');
+      }
+      response.json({
+        requests: await inspectionStore.requests(limit, rawFailuresOnly === "true"),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/vartma/v1/evaluations", async (request, response, next) => {
+    try {
+      if (!evaluationStore) {
+        response.status(503).json({
+          type: "error",
+          error: {
+            type: "api_error",
+            message: "Evaluation history requires a configured PostgreSQL store.",
+          },
+        });
+        return;
+      }
+      const rawLimit = typeof request.query["limit"] === "string" ? request.query["limit"] : "20";
+      const limit = Number(rawLimit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        throw new InputError('"limit" must be an integer between 1 and 100.');
+      }
+      response.json({ runs: await evaluationStore.list(limit) });
     } catch (error) {
       next(error);
     }
@@ -380,6 +549,7 @@ export function createApp(options: CreateAppOptions): Express {
         runtime,
         routingEngine,
         sessionCoordinator,
+        canonicalHistory,
         circuits,
         config,
         metrics,
@@ -454,6 +624,7 @@ export function createApp(options: CreateAppOptions): Express {
         runtime,
         routingEngine,
         sessionCoordinator,
+        canonicalHistory,
         circuits,
         config,
         metrics,
@@ -533,6 +704,7 @@ export function createApp(options: CreateAppOptions): Express {
         runtime,
         routingEngine,
         sessionCoordinator,
+        canonicalHistory,
         circuits,
         config,
         metrics,

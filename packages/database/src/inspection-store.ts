@@ -79,6 +79,31 @@ export interface SessionInspectionSummary {
   lastActivityAt: string;
 }
 
+export interface RequestInspectionSummary {
+  id: string;
+  sessionId: string | null;
+  routingMode: string;
+  status: string;
+  selectedProvider: string | null;
+  selectedModel: string | null;
+  taskClass: string | null;
+  explanation: string | null;
+  selectedReasons: string[];
+  attemptCount: number;
+  fallbackCount: number;
+  startedAt: string;
+  completedAt: string | null;
+  errorType: string | null;
+  errorMessage: string | null;
+}
+
+export interface InspectionStore {
+  trace(requestId: string): Promise<TraceInspection | undefined>;
+  requests(limit: number, failuresOnly?: boolean): Promise<RequestInspectionSummary[]>;
+  sessions(limit: number): Promise<SessionInspectionSummary[]>;
+  session(sessionId: string, recentLimit: number): Promise<SessionInspection | undefined>;
+}
+
 export interface SessionInspection extends SessionInspectionSummary {
   clientType: string | null;
   createdAt: string;
@@ -107,7 +132,7 @@ export interface SessionInspection extends SessionInspectionSummary {
   }>;
 }
 
-export class PrismaInspectionStore {
+export class PrismaInspectionStore implements InspectionStore {
   public constructor(private readonly database: RouterDatabase) {}
 
   public async trace(requestId: string): Promise<TraceInspection | undefined> {
@@ -185,6 +210,46 @@ export class PrismaInspectionStore {
         createdAt: usage.createdAt.toISOString(),
       })),
     };
+  }
+
+  public async requests(limit: number, failuresOnly = false): Promise<RequestInspectionSummary[]> {
+    const requests = await this.database.request.findMany({
+      ...(failuresOnly ? { where: { status: { in: ["FAILED", "CANCELLED"] } } } : {}),
+      orderBy: { startedAt: "desc" },
+      take: limit,
+      include: {
+        routeDecision: true,
+        _count: { select: { attempts: true, routeSwitches: true } },
+      },
+    });
+    return requests.map((request) => {
+      const explanation = isPlainObject(request.routeDecision?.explanation)
+        ? request.routeDecision.explanation
+        : undefined;
+      const selectedReasons = Array.isArray(explanation?.["selectedReasons"])
+        ? explanation["selectedReasons"].flatMap((value) =>
+            typeof value === "string" ? [redactText(value) ?? ""] : [],
+          )
+        : [];
+      return {
+        id: request.id,
+        sessionId: request.sessionId,
+        routingMode: request.routingMode,
+        status: request.status,
+        selectedProvider: request.selectedProvider,
+        selectedModel: request.selectedModel,
+        taskClass: request.routeDecision?.taskClass ?? null,
+        explanation:
+          typeof explanation?.["summary"] === "string" ? redactText(explanation["summary"]) : null,
+        selectedReasons,
+        attemptCount: request._count.attempts,
+        fallbackCount: request._count.routeSwitches,
+        startedAt: request.startedAt.toISOString(),
+        completedAt: request.completedAt?.toISOString() ?? null,
+        errorType: request.errorType,
+        errorMessage: redactText(request.errorMessage),
+      };
+    });
   }
 
   public async sessions(limit: number): Promise<SessionInspectionSummary[]> {

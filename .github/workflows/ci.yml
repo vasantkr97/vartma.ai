@@ -42,3 +42,62 @@ jobs:
       - run: npm run lint
       - run: npm run format:check
       - run: npm run vartma -- config validate --config configs/vartma.example.yaml
+      - run: npm audit --audit-level=high
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run smoke:load
+      - run: npm run smoke:clean-install
+
+  postgres-integration:
+    name: PostgreSQL migrations and diagnostics
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: postgresql://vartma:vartma@localhost:5432/vartma?schema=public
+      VARTMA_MASTER_KEY: ci-only-transcript-master-passphrase
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: vartma
+          POSTGRES_USER: vartma
+          POSTGRES_PASSWORD: vartma
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vartma -d vartma"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npx prisma migrate deploy
+      - run: npm run vartma -- start --config configs/vartma.example.yaml
+      - run: npm run vartma -- doctor --config configs/vartma.example.yaml --timeout 10000 --json
+      - run: npm run vartma -- status --config configs/vartma.example.yaml --json
+      - name: Route a PostgreSQL-backed request
+        run: >-
+          curl --fail-with-body http://127.0.0.1:8080/v1/chat/completions
+          -H 'content-type: application/json'
+          -H 'x-api-key: local-development-key'
+          -H 'x-vartma-session-id: ci-postgres-session'
+          -d '{"model":"fake/default","messages":[{"role":"user","content":"Return a CI marker."}]}'
+      - name: Stop managed gateway
+        if: always()
+        run: npm run vartma -- stop --config configs/vartma.example.yaml
+      - name: Validate hardened Compose deployment
+        run: docker compose config --quiet
+        env:
+          POSTGRES_PASSWORD: ci-compose-database-secret
+          VARTMA_DATABASE_URL: postgresql://vartma:ci-compose-database-secret@postgres:5432/vartma?schema=public
+          VARTMA_MASTER_KEY: ci-compose-transcript-master-passphrase
+          VARTMA_API_KEYS: ci-compose-gateway-key
+      - run: docker build --file deploy/docker/gateway.Dockerfile --target runtime .

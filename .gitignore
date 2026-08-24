@@ -10,5 +10,8 @@ Thumbs.db
 packages/database/src/generated/
 .prisma/
 *.vartma-state.json
+*.vartma-openai-state.json
 *.vartma-backups/
 *.vartma.lock
+*.vartma-server.json
+.vartma/

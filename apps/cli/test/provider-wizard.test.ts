@@ -12,7 +12,7 @@ describe("interactive provider wizard", () => {
       "yes",
       "https://user:secret@example.test?bad=1",
       "http://127.0.0.1:8000/",
-      "",
+      "none",
       "",
       "",
       "served-model",
@@ -63,7 +63,7 @@ describe("interactive provider wizard", () => {
       type: "openai-compatible",
       enabled: true,
       baseUrl: "http://127.0.0.1:8000",
-      apiKeyEnv: "COMPATIBLE_API_KEY",
+      authentication: "none",
       requestTimeoutMs: 120_000,
       maxRetries: 2,
       models: [

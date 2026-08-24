@@ -1,0 +1,24 @@
+{
+  "name": "@vartma/evals",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@langchain/langgraph": "^1.4.12",
+    "@vartma/canonical": "*",
+    "@vartma/routing": "*",
+    "yaml": "^2.9.0",
+    "zod": "latest"
+  }
+}

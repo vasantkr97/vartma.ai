@@ -33,8 +33,12 @@ export async function buildProviderInteractively(
   const type = await askChoice(options, "Provider type", PROVIDER_TYPES);
   const enabled = await askBoolean(options, "Enable this provider immediately", false);
   const baseUrl = await providerBaseUrl(options, type);
+  const authentication =
+    type === "openai-compatible"
+      ? await askChoice(options, "Authentication", ["bearer", "none"] as const)
+      : undefined;
   const apiKeyEnv =
-    type === "fake"
+    type === "fake" || authentication === "none"
       ? undefined
       : await askMatching(
           options,
@@ -156,6 +160,7 @@ export async function buildProviderInteractively(
     type,
     enabled,
     ...(baseUrl ? { baseUrl } : {}),
+    ...(authentication ? { authentication } : {}),
     ...(apiKeyEnv ? { apiKeyEnv } : {}),
     requestTimeoutMs,
     maxRetries,

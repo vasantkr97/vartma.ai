@@ -15,6 +15,7 @@ describe("vartma operator status", () => {
       {
         configPath: "./vartma.yaml",
         claudeLocation: { settingsPath: "C:/test/.claude/settings.json" },
+        openAIEnvPath: "C:/test/.env",
         timeoutMs: 1_000,
         offline: false,
       },
@@ -35,6 +36,13 @@ describe("vartma operator status", () => {
             baselineBackupPath: "C:/test/credential-bearing-backup.json",
           }),
         ),
+        openAIStatusImplementation: () =>
+          Promise.resolve({
+            configured: false,
+            state: "not_configured",
+            envPath: "C:/test/.env",
+            statePath: "C:/test/.env.vartma-openai-state.json",
+          }),
         now: () => new Date("2026-07-28T00:00:00.000Z"),
       },
     );
@@ -76,6 +84,7 @@ describe("vartma operator status", () => {
         gatewayUrl: "http://127.0.0.1:8080",
         mode: "balanced",
       },
+      openAIClient: { configured: false, state: "not_configured", envPath: "C:/test/.env" },
     });
     expect(fetchImplementation).toHaveBeenCalledOnce();
     const serialized = JSON.stringify(report);
@@ -93,6 +102,7 @@ describe("vartma operator status", () => {
       {
         configPath: "./missing.yaml",
         claudeLocation: { settingsPath: "C:/test/.claude/settings.json" },
+        openAIEnvPath: "C:/test/.env",
         timeoutMs: 1_000,
         offline: false,
       },
@@ -107,6 +117,13 @@ describe("vartma operator status", () => {
             statePath: "C:/test/.claude/.vartma-state.json",
           }),
         ),
+        openAIStatusImplementation: () =>
+          Promise.resolve({
+            configured: false,
+            state: "not_configured",
+            envPath: "C:/test/.env",
+            statePath: "C:/test/.env.vartma-openai-state.json",
+          }),
       },
     );
 
@@ -125,6 +142,7 @@ describe("vartma operator status", () => {
       {
         configPath: "./vartma.yaml",
         claudeLocation: { settingsPath: "C:/test/.claude/settings.json" },
+        openAIEnvPath: "C:/test/.env",
         timeoutMs: 1_000,
         offline: false,
       },
@@ -135,6 +153,13 @@ describe("vartma operator status", () => {
         claudeStatusImplementation: vi.fn<typeof claudeCodeStatus>(() =>
           Promise.reject(new Error("ANTHROPIC_AUTH_TOKEN=provider-secret-value")),
         ),
+        openAIStatusImplementation: () =>
+          Promise.resolve({
+            configured: false,
+            state: "not_configured",
+            envPath: "C:/test/.env",
+            statePath: "C:/test/.env.vartma-openai-state.json",
+          }),
       },
     );
 

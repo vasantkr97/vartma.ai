@@ -197,6 +197,58 @@ describe("PrismaInspectionStore", () => {
     });
     expect(JSON.stringify(detail)).not.toContain("hidden");
   });
+
+  it("lists request decisions and failures without prompt or secret content", async () => {
+    const findMany = vi.fn(() =>
+      Promise.resolve([
+        {
+          id: "request_2",
+          sessionId: "session_2",
+          routingMode: "eco",
+          status: "FAILED",
+          selectedProvider: "deepseek",
+          selectedModel: "deepseek/reasoner",
+          startedAt: date("2026-08-24T00:00:00.000Z"),
+          completedAt: date("2026-08-24T00:00:02.000Z"),
+          errorType: "timeout",
+          errorMessage: "token=provider-secret request timed out",
+          routeDecision: {
+            taskClass: "debugging",
+            explanation: {
+              summary: "Lowest expected cost for this task.",
+              selectedReasons: ["Calibrated success probability", "api_key=hidden"],
+            },
+          },
+          _count: { attempts: 2, routeSwitches: 1 },
+        },
+      ]),
+    );
+    const database = {
+      request: { findMany },
+      session: { findMany: vi.fn(), findUnique: vi.fn() },
+    } as unknown as RouterDatabase;
+
+    const result = await new PrismaInspectionStore(database).requests(25, true);
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: { in: ["FAILED", "CANCELLED"] } },
+        take: 25,
+      }),
+    );
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: "request_2",
+        taskClass: "debugging",
+        attemptCount: 2,
+        fallbackCount: 1,
+        errorMessage: "token=[REDACTED] request timed out",
+        selectedReasons: ["Calibrated success probability", "api_key=[REDACTED]"],
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain("provider-secret");
+    expect(JSON.stringify(result)).not.toContain("hidden");
+  });
 });
 
 function date(value: string): Date {

@@ -1,0 +1,5 @@
+ALTER TABLE "EvaluationRun"
+ADD COLUMN "maxOutputTokens" INTEGER NOT NULL DEFAULT 4096;
+
+ALTER TABLE "EvaluationRun"
+ALTER COLUMN "maxOutputTokens" DROP DEFAULT;

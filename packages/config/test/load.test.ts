@@ -85,6 +85,12 @@ describe("loadConfig", () => {
     expect(config.routing.session.switchScoreThreshold).toBe(0.06);
     expect(config.routing.fallback.maxAttempts).toBe(3);
     expect(config.routing.circuitBreaker.failureThreshold).toBe(3);
+    expect(config.routing.calibration).toMatchObject({
+      enabled: true,
+      version: "uncalibrated",
+      priorSampleSize: 20,
+      models: {},
+    });
   });
 
   it("rejects an invalid environment port", async () => {

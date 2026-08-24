@@ -1,4 +1,8 @@
-import { routerConfigSchema } from "@vartma/config";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { routerConfigSchema, setEncryptedCredential } from "@vartma/config";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -127,6 +131,85 @@ describe("vartma doctor", () => {
     expect(JSON.stringify(checks)).not.toContain("local-secret-value");
     expect(formatDiagnosticReport(diagnosticReport(checks), "Provider")).toContain(
       "Provider result: FAIL",
+    );
+  });
+
+  it("authenticates and probes with an encrypted BYOK credential", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "vartma-doctor-vault-"));
+    const credentialStorePath = join(directory, "credentials.enc");
+    const masterKey = "doctor-encrypted-master-passphrase";
+    const providerKey = "doctor-encrypted-provider-secret";
+    await setEncryptedCredential({
+      path: credentialStorePath,
+      masterKey,
+      reference: "openai",
+      value: providerKey,
+    });
+    const config = doctorConfig();
+    const provider = config.providers[1]!;
+    provider.credentialRef = "openai";
+    delete provider.apiKeyEnv;
+    const fetchMock = vi.fn<typeof fetch>((_input, init) => {
+      expect(init?.headers).toEqual({ authorization: `Bearer ${providerKey}` });
+      return Promise.resolve(new Response('{"id":"gpt-test"}', { status: 200 }));
+    });
+
+    const checks = await runProviderDiagnostics(
+      config,
+      { timeoutMs: 1_000, providerId: "openai", credentialStorePath },
+      {
+        environment: { VARTMA_MASTER_KEY: masterKey },
+        fetchImplementation: fetchMock,
+      },
+    );
+
+    expect(checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "credential:openai",
+          status: "pass",
+          message: "Encrypted credential reference openai is present.",
+        }),
+        expect.objectContaining({ id: "provider:openai:gpt-test", status: "pass" }),
+      ]),
+    );
+    expect(JSON.stringify(checks)).not.toContain(providerKey);
+  });
+
+  it("probes unauthenticated Ollama without requiring or sending a credential", async () => {
+    const config = doctorConfig();
+    config.providers = [
+      {
+        id: "ollama",
+        type: "openai-compatible",
+        profile: "ollama",
+        enabled: true,
+        models: [model("ollama", "ollama/default", "qwen2.5:7b")],
+        requestTimeoutMs: 120_000,
+        maxRetries: 0,
+      },
+    ];
+    config.routing.defaultModel = "ollama/default";
+    const fetchMock = vi.fn<typeof fetch>((_input, init) => {
+      expect(init?.headers).toEqual({});
+      return Promise.resolve(new Response('{"data":[{"id":"qwen2.5:7b"}]}', { status: 200 }));
+    });
+
+    const checks = await runProviderDiagnostics(
+      config,
+      { timeoutMs: 1_000, providerId: "ollama" },
+      { environment: {}, fetchImplementation: fetchMock },
+    );
+
+    expect(checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "credential:ollama",
+          status: "pass",
+          message: "Provider is configured for unauthenticated access.",
+        }),
+        expect.objectContaining({ id: "provider:ollama:qwen2.5:7b", status: "pass" }),
+      ]),
     );
   });
 });

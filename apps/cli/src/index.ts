@@ -1,18 +1,38 @@
 #!/usr/bin/env node
 
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import {
   initializeRouterConfig,
+  listEncryptedCredentialReferences,
   loadConfig,
   mutateRouterConfig,
   readProviderDefinition,
+  resolveCredentialStorePath,
+  setEncryptedCredential,
   undoRouterConfigMutation,
   type ConfigurableRoutingMode,
 } from "@vartma/config";
-import { createDatabase, PrismaInspectionStore, type RouterDatabase } from "@vartma/database";
-import { startServer } from "@vartma/gateway";
+import {
+  createDatabase,
+  PrismaEvaluationStore,
+  PrismaInspectionStore,
+  type RouterDatabase,
+} from "@vartma/database";
+import {
+  buildCalibrationFromFixedResults,
+  evaluationTargetSchema,
+  loadEvaluationSuite,
+  parseEvaluationJsonLines,
+  runEvaluationSuite,
+  summarizeEvaluation,
+  type EvaluationReport,
+  type EvaluationResult,
+} from "@vartma/evals";
+import { createRuntime, startServer } from "@vartma/gateway";
+import { ProviderError, runProviderConformance } from "@vartma/providers";
 import { Command } from "commander";
 
 import {
@@ -37,7 +57,11 @@ import {
   formatTraceInspection,
 } from "./operator-inspection.js";
 import { formatOperatorStatus, runOperatorStatus } from "./operator-status.js";
+import { configureOpenAIClient, undoOpenAIClientConfiguration } from "./openai-client-settings.js";
 import { buildProviderInteractively } from "./provider-wizard.js";
+import { startManagedGateway, stopManagedGateway } from "./process-manager.js";
+import { readHiddenSecret } from "./secret-input.js";
+import { uninstallVartma } from "./uninstall.js";
 
 const program = new Command();
 
@@ -66,8 +90,13 @@ program
   .description("Start the Vartma.ai gateway.")
   .option("-c, --config <path>", "Router configuration file", defaultConfigPath())
   .action(async (options: { config: string }) => {
-    const config = await loadConfig({ path: resolve(options.config) });
-    const server = await startServer(config);
+    const configPath = resolve(options.config);
+    const config = await loadConfig({ path: configPath });
+    const server = await startServer(config, {
+      runtime: createRuntime(config, {
+        credentialStorePath: resolveCredentialStorePath(configPath, config.credentials.storePath),
+      }),
+    });
     const address = server.address();
     process.stdout.write(
       `Gateway listening on ${
@@ -77,6 +106,143 @@ program
       }\n`,
     );
   });
+
+program
+  .command("login <provider-id>")
+  .description("Encrypt and store a provider API key for BYOK operation.")
+  .option("-c, --config <path>", "Router configuration file", defaultConfigPath())
+  .option("--from-env <name>", "Read the provider API key from an environment variable")
+  .action(async (providerId: string, options: { config: string; fromEnv?: string }) => {
+    const configPath = resolve(options.config);
+    const loaded = await loadConfig({ path: configPath });
+    const provider = loaded.providers.find((candidate) => candidate.id === providerId);
+    if (!provider) {
+      throw new Error(`Provider "${providerId}" was not found.`);
+    }
+    if (provider.type === "fake") {
+      throw new Error("The fake provider does not accept credentials.");
+    }
+    const masterKey = process.env[loaded.credentials.masterKeyEnv];
+    if (!masterKey) {
+      throw new Error(
+        `Set ${loaded.credentials.masterKeyEnv} to a master passphrase of at least 20 characters before running login.`,
+      );
+    }
+    const secret = options.fromEnv
+      ? process.env[options.fromEnv]
+      : await readHiddenSecret(`API key for ${providerId}: `);
+    if (!secret?.trim()) {
+      throw new Error(
+        options.fromEnv
+          ? `Environment variable "${options.fromEnv}" is missing or empty.`
+          : "The provider API key cannot be empty.",
+      );
+    }
+    const credentialRef = provider.credentialRef ?? provider.id;
+    const storePath = resolveCredentialStorePath(configPath, loaded.credentials.storePath);
+    await setEncryptedCredential({
+      path: storePath,
+      masterKey,
+      reference: credentialRef,
+      value: secret,
+    });
+    if (provider.credentialRef !== credentialRef) {
+      await mutateRouterConfig({
+        path: configPath,
+        mutation: { kind: "set-provider-credential", providerId, credentialRef },
+      });
+    }
+    const references = listEncryptedCredentialReferences({ path: storePath, masterKey });
+    if (!references.includes(credentialRef)) {
+      throw new Error("The encrypted credential failed its post-write verification.");
+    }
+    process.stdout.write(
+      `Stored encrypted credential for provider "${providerId}".\n` +
+        `Reference: ${credentialRef}\n` +
+        `Store: ${storePath}\n` +
+        `The API key and master key were not written to the router configuration.\n`,
+    );
+  });
+
+program
+  .command("start")
+  .description("Start the Vartma.ai gateway as a managed background process.")
+  .option("-c, --config <path>", "Router configuration file", defaultConfigPath())
+  .option("--timeout <milliseconds>", "Startup readiness timeout", "10000")
+  .action(async (options: { config: string; timeout: string }) => {
+    const result = await startManagedGateway({
+      configPath: resolve(options.config),
+      startupTimeoutMs: parseLifecycleTimeout(options.timeout),
+    });
+    process.stdout.write(
+      result.alreadyRunning
+        ? `Gateway is already running (PID ${String(result.pid)}).\nHealth: ${result.healthUrl}\n`
+        : `Gateway started (PID ${String(result.pid)}).\nHealth: ${result.healthUrl}\nState: ${result.statePath}\n`,
+    );
+  });
+
+program
+  .command("stop")
+  .description("Safely stop the managed Vartma.ai gateway.")
+  .option("-c, --config <path>", "Router configuration file", defaultConfigPath())
+  .option("--timeout <milliseconds>", "Shutdown timeout", "10000")
+  .action(async (options: { config: string; timeout: string }) => {
+    const result = await stopManagedGateway({
+      configPath: resolve(options.config),
+      shutdownTimeoutMs: parseLifecycleTimeout(options.timeout),
+    });
+    process.stdout.write(
+      !result
+        ? "No managed gateway state exists.\n"
+        : result.stopped
+          ? `Gateway stopped (PID ${String(result.pid)}).\n`
+          : `Removed stale gateway state for PID ${String(result.pid)}.\n`,
+    );
+  });
+
+program
+  .command("uninstall")
+  .description("Stop Vartma and restore coding-agent settings changed by Vartma.")
+  .option("-c, --config <path>", "Router configuration file", defaultConfigPath())
+  .option("--timeout <milliseconds>", "Shutdown timeout", "10000")
+  .option("--scope <scope>", "Claude settings scope: user or project", "project")
+  .option("--settings-path <path>", "Explicit Claude settings path (advanced)")
+  .option("--openai-env-path <path>", "OpenAI-compatible client dotenv path", ".env")
+  .action(
+    async (options: {
+      config: string;
+      timeout: string;
+      scope: string;
+      settingsPath?: string;
+      openaiEnvPath: string;
+    }) => {
+      const result = await uninstallVartma({
+        configPath: resolve(options.config),
+        claudeLocation: claudeLocation(options),
+        openAIEnvPath: options.openaiEnvPath,
+        shutdownTimeoutMs: parseLifecycleTimeout(options.timeout),
+      });
+      process.stdout.write(
+        `Managed gateway: ${result.gateway}.\n` +
+          `Claude Code: ${result.claudeCode}.\n` +
+          `OpenAI-compatible client: ${result.openAIClient}.\n` +
+          (result.restoredSettingsPath
+            ? `Restored settings: ${result.restoredSettingsPath}\n`
+            : "") +
+          (result.retainedBackupPath
+            ? `Baseline backup retained: ${result.retainedBackupPath}\n`
+            : "") +
+          (result.restoredOpenAIEnvPath
+            ? `Restored dotenv: ${result.restoredOpenAIEnvPath}\n`
+            : "") +
+          (result.retainedOpenAIBackupPath
+            ? `OpenAI baseline backup retained: ${result.retainedOpenAIBackupPath}\n`
+            : "") +
+          `Router configuration and encrypted credentials were preserved.\n` +
+          `Remove the global package with: npm uninstall --global @vartma/cli\n`,
+      );
+    },
+  );
 
 const config = program.command("config").description("Inspect or restore router configuration.");
 config
@@ -204,9 +370,11 @@ provider
         throw new Error(`Enabled provider "${providerId}" was not found.`);
       }
       const timeoutMs = parseNetworkTimeout(options.timeout);
+      const configPath = resolve(options.config);
       const checks = await runProviderDiagnostics(loaded, {
         timeoutMs,
         ...(providerId ? { providerId } : {}),
+        credentialStorePath: resolveCredentialStorePath(configPath, loaded.credentials.storePath),
       });
       const report = diagnosticReport(checks);
       process.stdout.write(
@@ -217,6 +385,109 @@ provider
       if (!report.ok) {
         process.exitCode = 1;
       }
+    },
+  );
+provider
+  .command("conformance [provider-id]")
+  .description("Make deliberate model calls and verify streaming/tool protocol invariants.")
+  .option("-c, --config <path>", "Router configuration file", defaultConfigPath())
+  .option("--timeout <milliseconds>", "Timeout for each real model call", "120000")
+  .option("--json", "Print a machine-readable report")
+  .action(
+    async (
+      providerId: string | undefined,
+      options: { config: string; timeout: string; json?: boolean },
+    ) => {
+      const configPath = resolve(options.config);
+      const loaded = await loadConfig({ path: configPath });
+      const selectedProviders = loaded.providers.filter(
+        (candidate) => candidate.enabled && (!providerId || candidate.id === providerId),
+      );
+      if (!selectedProviders.length) {
+        throw new Error(
+          providerId
+            ? `Enabled provider "${providerId}" was not found.`
+            : "No enabled providers were found.",
+        );
+      }
+      const selectedModel = selectedProviders.flatMap((candidate) =>
+        candidate.models.filter((model) => model.enabled),
+      )[0];
+      if (!selectedModel) throw new Error("The selected providers have no enabled models.");
+      const scopedConfig = {
+        ...loaded,
+        routing: { ...loaded.routing, defaultModel: selectedModel.id },
+        providers: loaded.providers.map((candidate) => ({
+          ...candidate,
+          enabled: selectedProviders.some((selected) => selected.id === candidate.id),
+        })),
+      };
+      const runtime = createRuntime(scopedConfig, {
+        credentialStorePath: resolveCredentialStorePath(
+          configPath,
+          scopedConfig.credentials.storePath,
+        ),
+      });
+      const timeoutMs = parseConformanceTimeout(options.timeout);
+      const reports = [];
+      for (const model of runtime.models.values()) {
+        const adapter = runtime.registry.get(model.provider);
+        try {
+          reports.push({
+            configuredModel: model.id,
+            ...(await runProviderConformance(
+              adapter,
+              model.upstreamModel,
+              {
+                requestId: `conformance-${Date.now().toString(36)}`,
+                messages: [
+                  {
+                    role: "user",
+                    content: [
+                      {
+                        type: "text",
+                        text: "Respond with exactly VARTMA_PROVIDER_OK.",
+                      },
+                    ],
+                  },
+                ],
+                tools: [],
+                maxOutputTokens: 32,
+                routingMode: "fixed",
+                constraints: { requiredCapabilities: ["text", "streaming"] },
+                metadata: { purpose: "provider_conformance" },
+              },
+              AbortSignal.timeout(timeoutMs),
+            )),
+          });
+        } catch (error) {
+          reports.push({
+            configuredModel: model.id,
+            provider: model.provider,
+            model: model.upstreamModel,
+            passed: false,
+            issues: [
+              `Conformance call failed (${error instanceof ProviderError ? error.code : "unexpected"}).`,
+            ],
+            eventsObserved: 0,
+          });
+        }
+      }
+      const passed = reports.every((report) => report.passed);
+      process.stdout.write(
+        options.json
+          ? `${JSON.stringify({ passed, reports }, null, 2)}\n`
+          : `${reports
+              .map(
+                (report) =>
+                  `${report.passed ? "PASS" : "FAIL"} ${report.configuredModel} ` +
+                  `events=${String(report.eventsObserved)}${
+                    report.issues.length ? ` issues=${report.issues.join("; ")}` : ""
+                  }`,
+              )
+              .join("\n")}\n`,
+      );
+      if (!passed) process.exitCode = 1;
     },
   );
 
@@ -256,6 +527,144 @@ program
     writeConfigMutationResult(result);
   });
 
+const evaluation = program
+  .command("eval")
+  .description("Run, summarize, and calibrate reproducible coding evaluations.");
+evaluation
+  .command("run <suite-path>")
+  .description("Run a LangGraph coding-agent suite through fixed or routed targets.")
+  .requiredOption("--target <target>", "fixed:<model-id> or router:<balanced|eco|quality>")
+  .requiredOption("-o, --output <path>", "Output JSONL result path")
+  .option("-c, --config <path>", "Router configuration file", defaultConfigPath())
+  .option("--gateway-url <url>", "Gateway root URL")
+  .option("--append", "Append to an existing JSONL result file")
+  .option("--no-persist", "Do not persist the run in configured PostgreSQL")
+  .option("--keep-workspaces", "Retain disposable task workspaces for inspection")
+  .action(
+    async (
+      suitePath: string,
+      options: {
+        target: string;
+        output: string;
+        config: string;
+        gatewayUrl?: string;
+        append?: boolean;
+        persist: boolean;
+        keepWorkspaces?: boolean;
+      },
+    ) => {
+      const configPath = resolve(options.config);
+      const config = await loadConfig({ path: configPath });
+      const apiKey =
+        process.env["VARTMA_API_KEY"] ??
+        config.auth.apiKeys[0] ??
+        (config.auth.enabled ? undefined : "router-auth-disabled");
+      if (!apiKey) {
+        throw new Error(
+          "Evaluation requires VARTMA_API_KEY or a static auth.apiKeys entry for the gateway.",
+        );
+      }
+      const loadedSuite = await loadEvaluationSuite(resolve(suitePath));
+      const target = parseEvaluationTarget(options.target);
+      const runs = await runEvaluationSuite({
+        suite: loadedSuite.suite,
+        suiteDirectory: loadedSuite.directory,
+        target,
+        gatewayUrl:
+          options.gatewayUrl ??
+          `http://${clientHost(config.server.host)}:${String(config.server.port)}`,
+        apiKey,
+        keepWorkspaces: options.keepWorkspaces ?? false,
+      });
+      const outputPath = resolve(options.output);
+      await writeFile(outputPath, `${runs.map((run) => JSON.stringify(run.result)).join("\n")}\n`, {
+        encoding: "utf8",
+        flag: options.append ? "a" : "wx",
+      });
+      if (options.persist) {
+        await persistEvaluationResults(
+          config.database.url,
+          runs.map((run) => run.result),
+        );
+      }
+      for (const run of runs) {
+        process.stdout.write(
+          `${run.result.success ? "PASS" : "FAIL"} ${run.result.taskId} ` +
+            `model=${run.result.selectedModel} cost=$${run.result.actualCostUsd} ` +
+            `latency=${String(run.result.latencyMs)}ms\n` +
+            (run.workspacePath ? `Workspace retained: ${run.workspacePath}\n` : ""),
+        );
+      }
+      process.stdout.write(
+        `Evaluation results written: ${outputPath}\n` +
+          (options.persist
+            ? `Evaluation run persisted: ${runs[0]?.result.runId ?? "unknown"}\n`
+            : ""),
+      );
+      if (runs.some((run) => !run.result.success)) process.exitCode = 2;
+    },
+  );
+evaluation
+  .command("summarize <results-path>")
+  .description("Compare fixed-model and router JSONL results with fairness checks.")
+  .option("--json", "Print machine-readable JSON")
+  .action(async (resultsPath: string, options: { json?: boolean }) => {
+    const results = parseEvaluationJsonLines(await readFile(resolve(resultsPath), "utf8"));
+    const report = summarizeEvaluation(results);
+    process.stdout.write(
+      options.json ? `${JSON.stringify(report, null, 2)}\n` : formatEvaluationReport(report),
+    );
+    if (!report.comparable) {
+      process.exitCode = 2;
+    }
+  });
+evaluation
+  .command("calibrate <results-path>")
+  .description("Build task/model success profiles from fixed-model JSONL results.")
+  .requiredOption("--calibration-version <version>", "Immutable calibration version")
+  .requiredOption("-o, --output <path>", "Output calibration JSON path")
+  .option("-c, --config <path>", "Router configuration file", defaultConfigPath())
+  .option("--apply", "Safely apply the calibration to the router configuration")
+  .option("--prior-sample-size <count>", "Bayesian prior sample strength", "20")
+  .option("--force", "Replace an existing output file")
+  .action(
+    async (
+      resultsPath: string,
+      options: {
+        calibrationVersion: string;
+        output: string;
+        config: string;
+        priorSampleSize: string;
+        force?: boolean;
+        apply?: boolean;
+      },
+    ) => {
+      const results = parseEvaluationJsonLines(await readFile(resolve(resultsPath), "utf8"));
+      const calibration = buildCalibrationFromFixedResults(
+        results,
+        options.calibrationVersion,
+        parseCalibrationPrior(options.priorSampleSize),
+      );
+      const outputPath = resolve(options.output);
+      await writeFile(outputPath, `${JSON.stringify(calibration, null, 2)}\n`, {
+        encoding: "utf8",
+        flag: options.force ? "w" : "wx",
+      });
+      process.stdout.write(
+        `Calibration written: ${outputPath}\n` +
+          `Version: ${calibration.version}\n` +
+          `Models: ${String(Object.keys(calibration.models).length)}\n`,
+      );
+      if (options.apply) {
+        const result = await mutateRouterConfig({
+          path: resolve(options.config),
+          mutation: { kind: "set-calibration", calibration },
+        });
+        writeConfigMutationResult(result);
+      }
+    },
+  );
+
 program
   .command("doctor")
   .description("Check configuration, credentials, providers, gateway, and PostgreSQL.")
@@ -263,9 +672,13 @@ program
   .option("--timeout <milliseconds>", "Timeout for each network check", "5000")
   .option("--json", "Print a machine-readable report")
   .action(async (options: { config: string; timeout: string; json?: boolean }) => {
-    const loaded = await loadConfig({ path: resolve(options.config) });
+    const configPath = resolve(options.config);
+    const loaded = await loadConfig({ path: configPath });
     const timeoutMs = parseNetworkTimeout(options.timeout);
-    const report = await runDoctor(loaded, { timeoutMs });
+    const report = await runDoctor(loaded, {
+      timeoutMs,
+      credentialStorePath: resolveCredentialStorePath(configPath, loaded.credentials.storePath),
+    });
     process.stdout.write(
       options.json ? `${JSON.stringify(report, null, 2)}\n` : formatDoctorReport(report),
     );
@@ -330,6 +743,62 @@ configure
     },
   );
 
+configure
+  .command("openai")
+  .description("Configure an OpenAI-compatible client dotenv file with backup and undo support.")
+  .option("-c, --config <path>", "Router configuration file", defaultConfigPath())
+  .option("--env-path <path>", "Client dotenv path", ".env")
+  .option("--gateway-url <url>", "Gateway root URL")
+  .option("--mode <mode>", "Routing mode: quality, balanced, or eco", "balanced")
+  .option("--model <model>", "Explicit router model alias")
+  .option("--undo", "Restore Vartma-managed dotenv values")
+  .action(
+    async (options: {
+      config: string;
+      envPath: string;
+      gatewayUrl?: string;
+      mode: string;
+      model?: string;
+      undo?: boolean;
+    }) => {
+      if (options.undo) {
+        const restored = await undoOpenAIClientConfiguration({ envPath: options.envPath });
+        process.stdout.write(
+          `OpenAI-compatible client configuration removed.\n` +
+            `Dotenv: ${restored.envPath}\n` +
+            `Baseline backup retained: ${restored.restoredFrom}\n`,
+        );
+        return;
+      }
+      const loaded = await loadConfig({ path: resolve(options.config) });
+      const apiKey =
+        process.env["VARTMA_API_KEY"] ??
+        loaded.auth.apiKeys[0] ??
+        (loaded.auth.enabled ? undefined : "router-auth-disabled");
+      if (!apiKey) {
+        throw new Error(
+          "No static router API key is configured. Add auth.apiKeys or set VARTMA_API_KEY.",
+        );
+      }
+      const mode = claudeMode(options.mode);
+      const configured = await configureOpenAIClient({
+        envPath: options.envPath,
+        gatewayUrl:
+          options.gatewayUrl ??
+          `http://${clientHost(loaded.server.host)}:${String(loaded.server.port)}`,
+        apiKey,
+        model: options.model ?? `vartma-${mode}`,
+      });
+      process.stdout.write(
+        `OpenAI-compatible clients can now route through ${configured.gatewayUrl}.\n` +
+          `Dotenv: ${configured.envPath}\n` +
+          `Model: ${configured.model}\n` +
+          `Baseline backup: ${configured.baselineBackupPath}\n` +
+          `Undo: vartma configure openai --undo --env-path "${configured.envPath}"\n`,
+      );
+    },
+  );
+
 program
   .command("bypass <state>")
   .description("Temporarily bypass or re-enable the router for Claude Code.")
@@ -356,6 +825,7 @@ program
   .option("--json", "Print machine-readable JSON")
   .option("--scope <scope>", "Claude settings scope: user or project", "project")
   .option("--settings-path <path>", "Explicit Claude settings path (advanced)")
+  .option("--openai-env-path <path>", "OpenAI-compatible client dotenv path", ".env")
   .action(
     async (options: {
       config: string;
@@ -364,10 +834,12 @@ program
       json?: boolean;
       scope: string;
       settingsPath?: string;
+      openaiEnvPath: string;
     }) => {
       const report = await runOperatorStatus({
         configPath: resolve(options.config),
         claudeLocation: claudeLocation(options),
+        openAIEnvPath: options.openaiEnvPath,
         timeoutMs: parseNetworkTimeout(options.timeout),
         offline: options.offline ?? false,
       });
@@ -436,6 +908,16 @@ function defaultConfigPath(): string {
   return process.env["VARTMA_CONFIG_PATH"] ?? "./vartma.yaml";
 }
 
+function parseEvaluationTarget(value: string) {
+  if (value.startsWith("fixed:")) {
+    return evaluationTargetSchema.parse({ kind: "fixed", model: value.slice("fixed:".length) });
+  }
+  if (value.startsWith("router:")) {
+    return evaluationTargetSchema.parse({ kind: "router", mode: value.slice("router:".length) });
+  }
+  throw new Error('Evaluation target must be "fixed:<model-id>" or "router:<mode>".');
+}
+
 function claudeLocation(options: {
   scope: string;
   settingsPath?: string;
@@ -487,6 +969,47 @@ function parseNetworkTimeout(value: string): number {
     throw new Error("Network timeout must be an integer between 100 and 120000 milliseconds.");
   }
   return parsed;
+}
+
+function parseConformanceTimeout(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 100 || parsed > 600_000) {
+    throw new Error("Conformance timeout must be an integer between 100 and 600000 milliseconds.");
+  }
+  return parsed;
+}
+
+function parseLifecycleTimeout(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1_000 || parsed > 120_000) {
+    throw new Error("Lifecycle timeout must be an integer between 1000 and 120000 milliseconds.");
+  }
+  return parsed;
+}
+
+function parseCalibrationPrior(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 10_000) {
+    throw new Error("Calibration prior sample size must be an integer between 0 and 10000.");
+  }
+  return parsed;
+}
+
+function formatEvaluationReport(report: EvaluationReport): string {
+  const lines = [
+    `Comparable: ${report.comparable ? "yes" : "no"}`,
+    ...report.comparabilityIssues.map((issue) => `Comparability issue: ${issue}`),
+  ];
+  for (const target of report.targets) {
+    lines.push(
+      `${target.target} solved=${String(target.solved)}/${String(target.tasks)} ` +
+        `pass=${(target.passRate * 100).toFixed(1)}% cost=$${target.actualCostUsd} ` +
+        `cost/solved=${target.costPerSolvedTaskUsd ? `$${target.costPerSolvedTaskUsd}` : "n/a"} ` +
+        `p50=${String(target.p50LatencyMs)}ms p95=${String(target.p95LatencyMs)}ms`,
+    );
+    lines.push(`  distribution=${JSON.stringify(target.routingDistribution)}`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function diagnosticReport(checks: DoctorReport["checks"]): DoctorReport {
@@ -568,6 +1091,27 @@ async function withInspectionStore<T>(
       await database?.$disconnect();
     } catch {
       // Inspection already finished or failed; never expose connection details from disconnect errors.
+    }
+  }
+}
+
+async function persistEvaluationResults(
+  connectionString: string,
+  results: EvaluationResult[],
+): Promise<void> {
+  let database: RouterDatabase | undefined;
+  try {
+    database = createDatabase(connectionString);
+    await new PrismaEvaluationStore(database).persist(results);
+  } catch {
+    throw new Error(
+      "Evaluation persistence failed. Run `vartma doctor` to check PostgreSQL connectivity, or rerun deliberately with --no-persist.",
+    );
+  } finally {
+    try {
+      await database?.$disconnect();
+    } catch {
+      // The persistence operation already finished or failed; do not expose connection details.
     }
   }
 }

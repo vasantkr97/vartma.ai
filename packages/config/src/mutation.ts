@@ -12,6 +12,7 @@ import {
 import { basename, dirname, resolve } from "node:path";
 
 import type { RoutingMode } from "@vartma/canonical";
+import type { RoutingCalibration } from "@vartma/routing";
 import { parse, parseDocument, stringify } from "yaml";
 
 import { createDefaultRouterConfig } from "./defaults.js";
@@ -28,8 +29,10 @@ export type RouterConfigMutation =
   | { kind: "set-mode"; mode: ConfigurableRoutingMode }
   | { kind: "use-model"; modelId: string }
   | { kind: "set-baseline"; modelId: string }
+  | { kind: "set-calibration"; calibration: RoutingCalibration }
   | { kind: "add-provider"; provider: ProviderConfig }
   | { kind: "remove-provider"; providerId: string }
+  | { kind: "set-provider-credential"; providerId: string; credentialRef: string | null }
   | { kind: "set-provider-enabled"; providerId: string; enabled: boolean };
 
 export interface RouterConfigMutationResult {
@@ -263,6 +266,9 @@ function applyMutation(
       document.setIn(["routing", "baselineModel"], mutation.modelId);
       break;
     }
+    case "set-calibration":
+      document.setIn(["routing", "calibration"], mutation.calibration);
+      break;
     case "add-provider":
       if (current.providers.some((provider) => provider.id === mutation.provider.id)) {
         throw new Error(`Provider "${mutation.provider.id}" already exists. No changes were made.`);
@@ -296,6 +302,23 @@ function applyMutation(
         );
       }
       document.deleteIn(["providers", providerIndex]);
+      break;
+    }
+    case "set-provider-credential": {
+      const providerIndex = current.providers.findIndex(
+        (provider) => provider.id === mutation.providerId,
+      );
+      if (providerIndex < 0) {
+        throw new Error(`Provider "${mutation.providerId}" was not found. No changes were made.`);
+      }
+      if (current.providers[providerIndex]?.type === "fake") {
+        throw new Error("The fake provider does not accept credentials. No changes were made.");
+      }
+      if (mutation.credentialRef) {
+        document.setIn(["providers", providerIndex, "credentialRef"], mutation.credentialRef);
+      } else {
+        document.deleteIn(["providers", providerIndex, "credentialRef"]);
+      }
       break;
     }
     case "set-provider-enabled": {
@@ -507,10 +530,14 @@ function mutationLabel(mutation: RouterConfigMutation): string {
       return `use:${mutation.modelId}`;
     case "set-baseline":
       return `baseline:${mutation.modelId}`;
+    case "set-calibration":
+      return `calibration:${mutation.calibration.version}`;
     case "add-provider":
       return `provider:add:${mutation.provider.id}`;
     case "remove-provider":
       return `provider:remove:${mutation.providerId}`;
+    case "set-provider-credential":
+      return `provider:credential:${mutation.providerId}`;
     case "set-provider-enabled":
       return `provider:${mutation.enabled ? "enable" : "disable"}:${mutation.providerId}`;
   }

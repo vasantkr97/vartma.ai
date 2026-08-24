@@ -128,6 +128,17 @@ describe("Claude Code multi-provider compatibility", () => {
 
     expect(anthropicFetch).toHaveBeenCalledTimes(1);
     expect(openaiFetch).toHaveBeenCalledTimes(1);
+    const serializedOpenaiBody = openaiFetch.mock.calls[0]?.[1]?.body;
+    expect(typeof serializedOpenaiBody).toBe("string");
+    const openaiBody = JSON.parse(serializedOpenaiBody as string) as Record<string, unknown>;
+    expect(JSON.stringify(openaiBody.input)).toContain("Design the architecture");
+    expect(JSON.stringify(openaiBody.input)).toContain("anthropic turn");
+    expect(JSON.stringify(openaiBody.input)).toContain("Explain this variable");
+    expect(openaiBody.metadata).toMatchObject({
+      canonical_history_owned: "true",
+      canonical_history_messages: "3",
+      canonical_history_incoming_messages: "1",
+    });
   });
 });
 

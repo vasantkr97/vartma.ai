@@ -1,8 +1,8 @@
 # Vartma.ai Product Build Plan
 
-**Status:** Living implementation plan — Sections 0–6 implemented  
+**Status:** Living implementation plan — goal-scope platform implemented; external parity evidence pending
 **Primary objective:** Build the working multi-model router first, then add the surrounding product  
-**Target:** At least 90% functional parity with the router product demonstrated in the reference video  
+**Target:** At least 98% of the externally observable routing functionality demonstrated by Entelligence
 **Planning assumption:** We are reproducing the demonstrated behavior, not any private implementation or unpublished routing algorithm
 
 ---
@@ -22,8 +22,11 @@ It will ultimately route between:
 - Anthropic models.
 - OpenAI models.
 - Google Gemini models.
+- Kimi/Moonshot models.
 - DeepSeek models.
-- GLM models.
+- GLM models through Z.ai.
+- Grok models through xAI.
+- Local Ollama models.
 - Mistral models.
 - Models exposed through AWS Bedrock, Google Vertex AI, or Azure.
 - Any compatible hosted endpoint.
@@ -40,31 +43,43 @@ It will ultimately route between:
 
 ## Current implementation status
 
-Updated: 2026-07-30
+Updated: 2026-08-24
 
-| Section                                                       | Status                            | Evidence                                                                                                                          |
-| ------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Section 0 — Foundation and specifications                     | Implemented and locally validated | npm workspace, strict TypeScript, Prisma schema/client, configuration, CI, Docker Compose, documentation                          |
-| Section 1 — Gateway skeleton and Anthropic-compatible ingress | Implemented and locally validated | Express gateway, fake provider, `/v1/messages`, JSON/SSE translation, tools, auth, cancellation, readiness, metrics, golden tests |
-| Section 2 — Anthropic and OpenAI provider adapters            | Implemented and locally validated | Native Messages/Responses adapters, text/tools, usage ledger, stable errors, cancellation, deadlines, bounded retries             |
-| Section 3 — Working routing engine                            | Implemented and locally validated | Registry, all filters, deterministic classifier, four modes, config-driven scoring/cost, explainable persisted decisions          |
-| Section 4 — Session routing, fallback, and escalation         | Implemented and locally validated | Sticky sessions, hysteresis, bounded safe fallback, model/provider circuits, outcomes, persisted switches                         |
-| Section 5 — Claude Code integration                           | Implemented and locally validated | Current beta protocol, setup/bypass/undo, 20-turn session test, two provider families, real Claude Code 2.1.212 `Read` tool loop  |
-| Section 6 — Generic endpoints and broader models              | Implemented and locally validated | Responses and Chat ingress, official OpenAI SDK, Gemini and generic-compatible adapters, local HTTP participation, conformance    |
-| Section 7 — CLI completion and operator experience            | In progress and locally validated | Safe config/wizard/undo, combined status/doctor, provider probes, models, secret-safe trace/session inspection, JSON output       |
-| Section 8 — Usage, cost, and savings analytics                | In progress and locally validated | Failed-attempt-inclusive ledger, declared baseline, immutable price evidence, aggregate and request APIs                          |
-| Sections 9–12                                                 | Planned                           | Evaluation, dashboard, production hardening, commercial platform                                                                  |
+| Section                                                       | Status                                         | Evidence                                                                                                                                                         |
+| ------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Section 0 — Foundation and specifications                     | Implemented and locally validated              | npm workspace, strict TypeScript, Prisma schema/client, configuration, CI, Docker Compose, documentation                                                         |
+| Section 1 — Gateway skeleton and Anthropic-compatible ingress | Implemented and locally validated              | Express gateway, fake provider, `/v1/messages`, JSON/SSE translation, tools, auth, cancellation, readiness, metrics, golden tests                                |
+| Section 2 — Anthropic and OpenAI provider adapters            | Implemented and locally validated              | Native Messages/Responses adapters, text/tools, usage ledger, stable errors, cancellation, deadlines, bounded retries                                            |
+| Section 3 — Working routing engine                            | Implemented and locally validated              | Registry, all filters, deterministic classifier, four modes, config-driven scoring/cost, explainable persisted decisions                                         |
+| Section 4 — Session routing, fallback, and escalation         | Implemented and locally validated              | Sticky sessions, hysteresis, bounded safe fallback, model/provider circuits, outcomes, persisted switches                                                        |
+| Section 5 — Claude Code integration                           | Implemented and locally validated              | Current beta protocol, setup/bypass/undo, 20-turn session test, two provider families, real Claude Code 2.1.212 `Read` tool loop                                 |
+| Section 6 — Generic endpoints and broader models              | Implemented and locally validated              | Responses and Chat ingress, official OpenAI SDK, Gemini and generic-compatible adapters, local HTTP participation, conformance                                   |
+| Section 7 — CLI completion and operator experience            | Implemented and locally validated              | Encrypted BYOK, safe setup/undo/uninstall, managed lifecycle, diagnostics, OpenAI/Claude client configuration, clean npm install                                 |
+| Section 8 — Usage, cost, and savings analytics                | Implemented and locally validated              | Retry-inclusive ledger, declared baseline, immutable price evidence, aggregate/request APIs, spend and savings console                                           |
+| Section 9 — Evaluation platform and router calibration        | Implemented; evidence pending                  | LangGraph agent/tool/verifier harness, actual ledger usage, PostgreSQL runs, calibration; real multi-provider corpus not yet run                                 |
+| Section 10 — React operator console                           | Implemented and locally validated              | Providers, models, routing decisions, sessions, spend, savings, evaluations, failures, health, and calibration                                                   |
+| Section 11 — Production hardening                             | Implemented locally; external evidence pending | Encrypted transcripts/config snapshots, load and security gates, live migrations, hardened Compose; remote matrix, soak, recovery, and independent review remain |
+| Section 12 — Commercial platform                              | Excluded from current goal                     | Payments, subscriptions, enterprise SSO/SCIM, and marketplace billing are intentionally out of scope                                                             |
 
-Current verification: 33 test files and 179 tests pass. Build, strict type checking, lint,
-formatting, Prisma generation/validation, router configuration validation, CLI command checks, and
-the offline real-Claude-Code smoke test pass locally. The official OpenAI Node SDK passes both
+Current verification: 48 test files and 246 tests pass. Build, strict type checking, lint,
+formatting, Prisma generation/validation, full-tree and production dependency audits, router configuration
+validation, concurrent load smoke, isolated global-package installation, and the offline
+real-Claude-Code smoke test pass locally. The official OpenAI Node SDK passes both
 Responses JSON/SSE and Chat Completions requests against the router. Native Gemini and a local
 OpenAI-compatible server participate through real HTTP mock-provider boundaries, and unsupported
 model capabilities are rejected before contacting the upstream.
 
-The Docker Compose definition and migration are checked in and Prisma-valid. Applying the migration
-to a live local PostgreSQL container remains an environment validation step whenever Docker Desktop
-is running.
+The hardened Docker Compose definition, production image, one-shot migration service, and all eight
+migrations pass locally against disposable PostgreSQL 17. The healthy containerized gateway routes
+and persists a request, redacts its gateway key in logs, and tears down cleanly. CI provisions
+PostgreSQL, applies migrations, starts the managed gateway, routes a database-backed request, and
+builds the runtime image. Cross-platform workflow evidence becomes authoritative only after the
+pushed GitHub Actions matrix succeeds.
+
+The parity goal is not yet proven complete. It still requires real authenticated calls across the
+named provider families, a sufficiently large identical-task fixed-versus-Balanced-versus-Eco
+benchmark, and measured quality/cost results. No source-level or mock test can substitute for those
+external results.
 
 ---
 
@@ -364,7 +379,7 @@ Later:
 Use these tools only where they add measurable value:
 
 - **LangChain:** Optional for internal evaluation judges, summarization experiments, and non-critical model experiments. Do not use it to hide the raw provider protocol in the gateway data path.
-- **LangGraph:** Optional later for long-running evaluation, calibration, and human-review workflows. The synchronous router remains a deterministic TypeScript pipeline.
+- **LangGraph:** Used for the implemented evaluation agent's model/tool/verification state machine. The synchronous router remains a deterministic TypeScript pipeline.
 - **LangSmith:** Optional, disabled-by-default development/evaluation export. It is never the billing ledger or sole trace store, and prompt/code content must be redacted or explicitly authorized before export.
 
 The router must run completely when all three tools are absent or unavailable.
@@ -380,7 +395,7 @@ The initial npm workspace should be organized as:
 ├── apps/
 │   ├── gateway/                 # Express gateway/server
 │   ├── cli/                     # vartma CLI
-│   └── dashboard/               # React + Vite dashboard (later section)
+│   └── console/                 # React + Vite operator console
 ├── packages/
 │   ├── canonical/               # Provider-neutral request/event types
 │   ├── config/                  # Zod configuration loading/validation
@@ -1380,7 +1395,7 @@ Evidence:
 
 ### Section 7 — CLI completion and operator experience
 
-**Status:** In progress and locally validated on 2026-07-28
+**Status:** Implemented and locally validated on 2026-08-24
 
 **Estimated effort:** 1–2 weeks
 
@@ -1417,20 +1432,23 @@ Implemented so far:
   lint, formatting, Prisma validation, and CLI config validation. Remote results are still required
   before claiming all three operating systems are validated.
 - `status` reports sanitized local configuration/routing/provider state, bounded gateway readiness,
-  and Claude Code active/bypassed/drifted state in human or JSON form; missing/invalid configuration
-  and network/client failures are represented without serializing caught errors.
+  and Claude Code/OpenAI-compatible active/bypassed/drifted state in human or JSON form;
+  missing/invalid configuration and network/client failures are represented without serializing
+  caught errors.
 - Claude Code configuration, status, bypass, and exact rollback are already implemented and tested.
+- `login` stores provider keys in an authenticated AES-256-GCM vault whose master key remains
+  external. Encrypted references take precedence over environment fallbacks.
+- `start`, `stop`, `uninstall`, OpenAI dotenv setup/undo, global npm packaging, and isolated clean
+  installation are implemented and tested.
 
 Still required:
 
-- OpenAI-client configuration/undo.
-- Operating-system secure credential storage and the corresponding `login` workflow.
-- Windows, Linux, and macOS packaged builds plus clean-machine installation tests after the
-  distribution target is confirmed with the user.
+- Successful remote Windows, Linux, and macOS CI runs before claiming all three operating systems.
+- npm registry publication and release signing credentials for a public release.
 
 ### Section 8 — Usage, cost, and savings analytics
 
-**Status:** In progress and locally validated on 2026-07-28
+**Status:** Implemented and locally validated on 2026-08-24
 
 **Estimated effort:** 1–2 weeks
 
@@ -1468,12 +1486,13 @@ Implemented so far:
 
 Still required:
 
-- Apply and exercise the migration against a live PostgreSQL instance when Docker is available.
 - Reconcile token-calculated costs against provider billing exports where providers expose them.
 - Add larger-dataset query benchmarks and database-side aggregation/materialization if the measured
   workload requires it.
 
 ### Section 9 — Evaluation platform and router calibration
+
+**Status:** Platform implemented; real multi-provider evidence pending
 
 **Estimated effort:** 3–5 weeks initially, then continuous
 
@@ -1495,7 +1514,28 @@ Acceptance:
 - Balanced and Eco thresholds are backed by measured data.
 - A regressing router version cannot be promoted accidentally.
 
+Implemented:
+
+- Strict versioned YAML suite/task/command schemas and disposable repository fixtures.
+- A LangGraph coding agent with confined file tools, allowlisted no-shell commands, trusted
+  verifiers, bounded turns/time, and secret-minimal subprocess environments.
+- Actual retry-inclusive usage collection from the gateway ledger, JSONL portability,
+  transactional PostgreSQL run/task persistence, summaries, and fixed-model calibration output.
+- Fairness checks require identical task IDs, dataset/harness/prompt versions, timeout, retry,
+  cache, and maximum-output settings before fixed and routed targets are called comparable.
+- One shared benchmark deadline reaches in-flight gateway calls. Provider errors and timeouts are
+  retained as honest failed results with actual usage, model attribution, and diagnostic workspace
+  instead of disappearing from calibration data.
+
+Still required:
+
+- Run a sufficiently large public coding corpus against real fixed baselines, Balanced, and Eco.
+- Use those results to choose and document the promotion thresholds; no savings/quality claim is
+  valid before this evidence exists.
+
 ### Section 10 — Dashboard for 90% parity
+
+**Status:** Goal-scope console implemented and locally validated
 
 **Estimated effort:** 3–4 weeks
 
@@ -1512,6 +1552,19 @@ Build:
 - Provider health.
 - Evaluation reports.
 
+Implemented:
+
+- React/Vite same-origin console served by Express.
+- Dedicated provider, model, routing-decision, session, spend/savings, evaluation, and failure
+  views backed by authenticated metadata-only APIs.
+- Route explanations, attempt/fallback counts, health, retry-inclusive cost, and calibration sample
+  coverage without prompt/response exposure.
+
+Deferred beyond the current read-only goal scope:
+
+- Browser policy editing; CLI configuration mutations remain validated, locked, backed up, and
+  exactly undoable.
+
 Acceptance:
 
 - Operators can answer which model was chosen and why.
@@ -1520,6 +1573,8 @@ Acceptance:
 - Savings and quality are visible together.
 
 ### Section 11 — Production hardening
+
+**Status:** Implemented and locally validated where self-contained; external evidence remains
 
 **Estimated effort:** 2–4 weeks initially, then continuous
 
@@ -1543,6 +1598,23 @@ Acceptance:
 - Database recovery is demonstrated.
 - Releases can be rolled back.
 - Security findings have owners and resolution dates.
+
+Implemented:
+
+- Bounded 400-request concurrent load smoke with an enforced p95 limit and zero-failure gate.
+- Malformed streams, timeouts, cancellation, rate limits, retry/fallback, circuit breaker, and
+  no-replay-after-visible-output tests.
+- Full-tree and production-only dependency audits with zero known vulnerabilities.
+- Encrypted credentials/transcripts, redacted structured logs, required deployment secrets,
+  production-dependency-only image, no-new-privileges, and dropped Linux capabilities.
+- Live PostgreSQL 17 migration, readiness, persistence, and complete Compose lifecycle proof.
+- Windows/Linux/macOS CI matrix plus a PostgreSQL integration job.
+
+Still required:
+
+- Observe the pushed cross-platform CI matrix, run a sustained production-like soak, demonstrate
+  backup restoration, complete independent security review, and establish signed release/rollback
+  evidence before a public production claim.
 
 ### Section 12 — Commercial and enterprise product
 
@@ -1589,12 +1661,13 @@ For two to four capable engineers:
 This is approximately:
 
 - Three months to a strong working-router milestone.
-- Six to eight months to approximately 90% functional parity.
+- Six to eight months to a broad parity implementation, followed by real-provider evidence needed
+  to substantiate the 98% externally observable target.
 
 For one developer, plan for roughly:
 
 - Five to eight months for a robust working router.
-- Nine to fifteen months for the 90% parity target.
+- Nine to fifteen months for the implementation, with the 98% claim gated by benchmark evidence.
 
 The schedule assumes experience with Node.js, TypeScript, Express, provider APIs, PostgreSQL, Prisma, and production backend systems. Learning while building will increase it.
 

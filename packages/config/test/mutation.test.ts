@@ -134,6 +134,47 @@ describe("router configuration mutations", () => {
     ).toBe(true);
   });
 
+  it("applies versioned calibration with backup and undo", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "router-config-calibration-"));
+    const configPath = join(directory, "vartma.yaml");
+    await initializeRouterConfig({
+      path: configPath,
+      now: () => new Date("2026-08-24T00:00:00.000Z"),
+    });
+
+    const result = await mutateRouterConfig({
+      path: configPath,
+      mutation: {
+        kind: "set-calibration",
+        calibration: {
+          enabled: true,
+          version: "eval-v1",
+          priorSampleSize: 10,
+          models: {
+            "fake/default": {
+              tasks: {
+                debugging: {
+                  successRate: 0.75,
+                  sampleSize: 20,
+                  averageAttempts: 1.2,
+                  observedAt: "2026-08-24T00:00:00.000Z",
+                  source: "fixed-model test run",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.operation).toBe("calibration:eval-v1");
+    expect(result.config.routing.calibration.version).toBe("eval-v1");
+    await undoRouterConfigMutation({ path: configPath });
+    expect((await loadConfig({ path: configPath })).routing.calibration.version).toBe(
+      "uncalibrated",
+    );
+  });
+
   it("rejects unsafe provider/default-model mutations before writing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "router-config-safe-"));
     const configPath = join(directory, "vartma.yaml");

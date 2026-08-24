@@ -7,6 +7,7 @@ import {
   ModelRegistry,
   RoutingEngine,
   RoutingError,
+  type RoutingCalibration,
 } from "../src/index.js";
 import { providerRegistry, TestProvider, testModel, testRequest } from "./helpers.js";
 
@@ -32,13 +33,19 @@ const frontier = testModel({
   latencyTier: 4,
 });
 
-function engine(models = [cheap, balanced, frontier], health = {}, baselineModel?: string) {
+function engine(
+  models = [cheap, balanced, frontier],
+  health = {},
+  baselineModel?: string,
+  calibration?: RoutingCalibration,
+) {
   return new RoutingEngine({
     models: new ModelRegistry(models),
     providers: providerRegistry(models, health),
     policies: defaultRoutingPolicies,
     routerVersion: "test-router-v1",
     sessionPolicy: defaultSessionRoutingPolicy,
+    ...(calibration ? { calibration } : {}),
     ...(baselineModel ? { baselineModel } : {}),
   });
 }
@@ -148,6 +155,7 @@ describe("RoutingEngine advanced session policy", () => {
         lastTaskClass: "code_generation",
         consecutiveFailures: 0,
         successfulOutcomes: 0,
+        automaticEscalationLevel: 0,
         lastActivityAt: new Date(0).toISOString(),
       },
     });
@@ -172,6 +180,7 @@ describe("RoutingEngine advanced session policy", () => {
         lastTaskClass: "code_generation",
         consecutiveFailures: 0,
         successfulOutcomes: 0,
+        automaticEscalationLevel: 0,
         lastActivityAt: new Date(0).toISOString(),
       },
     });
@@ -225,6 +234,7 @@ describe("RoutingEngine session policy", () => {
         lastTaskClass: "code_generation",
         consecutiveFailures: 0,
         successfulOutcomes: 0,
+        automaticEscalationLevel: 0,
         lastActivityAt: "2026-07-28T00:00:00.000Z",
       },
     });
@@ -251,6 +261,7 @@ describe("RoutingEngine session policy", () => {
         turnCount: 3,
         consecutiveFailures: 0,
         successfulOutcomes: 0,
+        automaticEscalationLevel: 0,
         lastActivityAt: "2026-07-28T00:00:00.000Z",
       },
     });
@@ -517,6 +528,122 @@ describe("RoutingEngine filters", () => {
 });
 
 describe("RoutingEngine scoring and explanations", () => {
+  it("uses task-specific evaluation evidence instead of quality tier as the success estimate", async () => {
+    const evaluatedEconomy = testModel({
+      id: "evaluated/economy",
+      qualityTier: 2,
+      inputPrice: 1,
+      outputPrice: 4,
+    });
+    const disappointingFrontier = testModel({
+      id: "evaluated/frontier",
+      qualityTier: 5,
+      inputPrice: 12,
+      outputPrice: 48,
+    });
+    const calibration: RoutingCalibration = {
+      enabled: true,
+      version: "coding-eval-2026-08-24",
+      priorSampleSize: 0,
+      models: {
+        [evaluatedEconomy.id]: {
+          tasks: {
+            code_generation: {
+              successRate: 0.92,
+              sampleSize: 100,
+              averageAttempts: 1.05,
+              observedAt: "2026-08-24T00:00:00.000Z",
+              source: "reproducible coding evaluation",
+            },
+          },
+        },
+        [disappointingFrontier.id]: {
+          tasks: {
+            code_generation: {
+              successRate: 0.55,
+              sampleSize: 100,
+              averageAttempts: 1.8,
+              observedAt: "2026-08-24T00:00:00.000Z",
+              source: "reproducible coding evaluation",
+            },
+          },
+        },
+      },
+    };
+
+    const decision = await engine(
+      [evaluatedEconomy, disappointingFrontier],
+      {},
+      undefined,
+      calibration,
+    ).route(testRequest());
+
+    expect(decision.selectedModel.id).toBe(evaluatedEconomy.id);
+    expect(
+      decision.candidates.find((item) => item.model.id === evaluatedEconomy.id)?.score,
+    ).toMatchObject({
+      expectedSuccess: 0.92,
+      expectedAttempts: 1.05,
+      calibrationSource: "task_evaluation",
+      calibrationSampleSize: 100,
+    });
+    expect(decision.explanation.selectedReasons.join(" ")).toContain("100 samples");
+  });
+
+  it("prices retries, failures, and the cold-input cost of a model switch", async () => {
+    const current = testModel({
+      id: "cache/current",
+      qualityTier: 3,
+      inputPrice: 10,
+      outputPrice: 20,
+    });
+    const alternative = testModel({
+      id: "cache/alternative",
+      qualityTier: 3,
+      inputPrice: 10,
+      outputPrice: 20,
+    });
+    const sample = {
+      successRate: 1,
+      sampleSize: 20,
+      averageAttempts: 2,
+      observedAt: "2026-08-24T00:00:00.000Z",
+      source: "cache-aware evaluation",
+    };
+    const decision = await engine([current, alternative], {}, undefined, {
+      enabled: true,
+      version: "cache-eval-v1",
+      priorSampleSize: 0,
+      models: {
+        [current.id]: { default: sample, tasks: {} },
+        [alternative.id]: { default: sample, tasks: {} },
+      },
+    }).route(testRequest(), undefined, {
+      session: {
+        id: "cache-session",
+        routingMode: "balanced",
+        currentProvider: current.provider,
+        currentModel: current.id,
+        escalationLevel: 0,
+        automaticEscalationLevel: 0,
+        turnCount: 2,
+        consecutiveFailures: 0,
+        successfulOutcomes: 0,
+        lastActivityAt: "2026-08-24T00:00:00.000Z",
+      },
+    });
+
+    const currentScore = decision.candidates.find((item) => item.model.id === current.id)?.score;
+    const alternativeScore = decision.candidates.find(
+      (item) => item.model.id === alternative.id,
+    )?.score;
+    expect(currentScore?.switchColdInputCostUsd).toBe(0);
+    expect(alternativeScore?.switchColdInputCostUsd).toBeCloseTo(0.009, 8);
+    expect(alternativeScore!.expectedTotalCostUsd).toBeGreaterThan(
+      currentScore!.expectedTotalCostUsd,
+    );
+  });
+
   it("uses configured pricing, so price changes require no routing-code change", async () => {
     const first = testModel({
       id: "one/equal",

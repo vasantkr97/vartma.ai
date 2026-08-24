@@ -1,8 +1,8 @@
 # Vartma.ai CLI
 
-Section 7 is in progress. The CLI currently covers safe configuration initialization/mutation,
-gateway startup, Claude Code configuration/rollback, model discovery, provider connectivity,
-complete diagnostics, and persisted trace/session inspection.
+The CLI covers safe configuration initialization/mutation, managed gateway lifecycle, Claude Code
+configuration/rollback, model discovery, provider connectivity, evaluation calibration, complete
+diagnostics, and persisted trace/session inspection.
 
 Run it from the workspace with:
 
@@ -11,6 +11,22 @@ npm run vartma -- --help
 ```
 
 Unless `--config` or `VARTMA_CONFIG_PATH` is supplied, commands use `./vartma.yaml`.
+
+## Managed gateway lifecycle
+
+`vartma start` launches the gateway as a hidden detached process on Windows, macOS, and Linux and
+waits for its public health endpoint. A random instance token is returned only as a response header
+and recorded with the process ID. `vartma stop` verifies that token before sending `SIGTERM`, so a
+stale PID file cannot terminate an unrelated reused process ID.
+
+```sh
+vartma start --config ./vartma.yaml
+vartma status --config ./vartma.yaml
+vartma stop --config ./vartma.yaml
+```
+
+State is stored beside the configuration as `<config>.vartma-server.json` and excluded from Git.
+Foreground `vartma serve` remains available for containers and service managers.
 
 ## Router configuration
 
@@ -96,8 +112,8 @@ the database connection string are never included in the report.
 
 ## Operator status
 
-`status` combines local router configuration, bounded gateway readiness, and Claude Code
-integration state:
+`status` combines local router configuration, bounded gateway readiness, Claude Code integration,
+and OpenAI-compatible client state:
 
 ```sh
 npm run vartma -- status
@@ -105,12 +121,12 @@ npm run vartma -- status --json
 npm run vartma -- status --offline
 ```
 
-The report includes the active routing mode/model, enabled provider/model counts, credential
-environment-variable presence, authentication/database-readiness flags, gateway reachability, and
-Claude Code active/bypassed/drifted state. It omits gateway key values, database URLs, provider
-secret values, and credential-bearing backup paths. Missing or invalid configuration, gateway
-unavailability, and client drift produce explicit states and a nonzero result. `--offline` skips
-the network probe for scripting or configuration-only checks.
+The report includes the active routing mode/model, enabled provider/model counts, encrypted or
+environment credential presence, authentication/database-readiness flags, gateway reachability,
+and Claude Code/OpenAI client active/bypassed/drifted state. It omits gateway key values, database
+URLs, provider secret values, and credential-bearing backup paths. Missing or invalid
+configuration, gateway unavailability, and client drift produce explicit states and a nonzero
+result. `--offline` skips the network probe for scripting or configuration-only checks.
 
 ## Models and providers
 
@@ -126,11 +142,17 @@ Probe every enabled provider or one provider:
 ```sh
 npm run vartma -- provider test
 npm run vartma -- provider test gemini --json
+npm run vartma -- provider conformance deepseek --timeout 120000 --json
 ```
 
 The probe verifies each configured upstream model endpoint. Fake providers are checked in-process.
 Missing credentials are reported explicitly and their network probes are skipped. API keys are sent
 only in provider-specific headers and are never put in output or URLs.
+
+`provider conformance` is deliberately different: it makes a small real generation request to each
+selected model and validates health, token estimation, stream lifecycle, balanced content blocks,
+and tool-call JSON. It can incur provider cost and should be run only when intended. Failures expose
+stable error categories rather than raw provider messages or credentials.
 
 ## Trace inspection
 
@@ -185,18 +207,30 @@ npm run vartma -- configure claude-code --undo
 
 See [claude-code.md](./claude-code.md) for scopes, backups, drift detection, and exact rollback.
 
-## Remaining Section 7 work
+## OpenAI-compatible client configuration
 
-The following commands or distribution concerns are not yet complete:
+Manage standard OpenAI client dotenv values without overwriting unrelated entries:
 
-- OpenAI-client configuration management and rollback;
-- secure operating-system credential storage/login;
-- cross-platform packaged distribution and clean-machine installation.
+```sh
+vartma configure openai --env-path ./.env --mode balanced
+vartma status --openai-env-path ./.env --offline
+vartma configure openai --undo --env-path ./.env
+```
+
+`vartma uninstall` stops only the Vartma-owned managed gateway and restores both managed client
+integrations while preserving router configuration, encrypted credentials, and baseline backups.
+
+## Credentials and distribution
+
+`vartma login <provider-id>` stores BYOK credentials in the authenticated encrypted vault. The
+master key stays in `VARTMA_MASTER_KEY` (or the configured environment-variable name), not in the
+vault or YAML. The globally installable npm package is assembled as a self-contained tarball and
+exercised by `npm run smoke:clean-install` in a temporary global prefix.
 
 The checked-in CI workflow runs the build, full tests, lint, formatting, Prisma validation, and CLI
 configuration validation on Windows, Linux, and macOS. Those jobs become authoritative
 cross-platform evidence when the repository is connected to CI; local Windows success alone is not
 reported as proof of the other operating systems.
 
-The choice between an npm-global distribution, standalone executables, or both must be confirmed
-before packaging work begins. No packaging tool has been selected implicitly.
+Publishing the npm package and signed standalone binaries remains a release operation requiring
+registry/signing credentials; the source package and clean-install lifecycle are implemented.
