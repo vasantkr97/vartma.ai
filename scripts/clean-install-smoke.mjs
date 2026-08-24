@@ -37,7 +37,19 @@ try {
       maxBuffer: 10 * 1024 * 1024,
     },
   );
-  const cliEntry = join(installPrefix, "node_modules", "@vartma", "cli", "dist", "index.js");
+  const { stdout: globalRootOutput } = await runNpm(
+    ["root", "--global", "--prefix", installPrefix],
+    {
+      cwd: installPrefix,
+      windowsHide: true,
+      timeout: 30_000,
+    },
+  );
+  const globalRoot = globalRootOutput.trim();
+  if (!globalRoot) {
+    throw new Error("npm did not report the isolated global package root.");
+  }
+  const cliEntry = join(globalRoot, "@vartma", "cli", "dist", "index.js");
   const { stdout } = await execute(process.execPath, [cliEntry, "--help"], {
     cwd: installPrefix,
     windowsHide: true,
