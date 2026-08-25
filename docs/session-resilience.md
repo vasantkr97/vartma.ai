@@ -14,9 +14,11 @@ Routing metadata includes:
 - Accumulated cost and token counts.
 
 The router separately owns the canonical session transcript. With PostgreSQL and
-`VARTMA_MASTER_KEY` configured, that transcript is encrypted at rest with AES-256-GCM using a
-scrypt-derived key and authenticated against its session ID. Without both prerequisites, canonical
-history is process-local and does not survive a restart. The next request can be either a complete
+`VARTMA_MASTER_KEY` configured, that transcript is encrypted at rest with AES-256-GCM. Scrypt
+hardens the master passphrase once at store startup; HKDF derives random-salted per-transcript keys,
+and authenticated additional data binds each ciphertext to its session ID. Version-one ciphertext
+that used per-record scrypt remains readable. Without both prerequisites, canonical history is
+process-local and does not survive a restart. The next request can be either a complete
 history or a delta: Vartma merges it into the canonical transcript before classification and
 provider translation. Only content returned by provider APIs is portable; hidden reasoning that a
 provider never returns cannot be transferred.

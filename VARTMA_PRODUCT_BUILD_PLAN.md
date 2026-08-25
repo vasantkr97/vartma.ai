@@ -43,25 +43,25 @@ It will ultimately route between:
 
 ## Current implementation status
 
-Updated: 2026-08-24
+Updated: 2026-08-25
 
-| Section                                                       | Status                                         | Evidence                                                                                                                                                         |
-| ------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Section 0 — Foundation and specifications                     | Implemented and locally validated              | npm workspace, strict TypeScript, Prisma schema/client, configuration, CI, Docker Compose, documentation                                                         |
-| Section 1 — Gateway skeleton and Anthropic-compatible ingress | Implemented and locally validated              | Express gateway, fake provider, `/v1/messages`, JSON/SSE translation, tools, auth, cancellation, readiness, metrics, golden tests                                |
-| Section 2 — Anthropic and OpenAI provider adapters            | Implemented and locally validated              | Native Messages/Responses adapters, text/tools, usage ledger, stable errors, cancellation, deadlines, bounded retries                                            |
-| Section 3 — Working routing engine                            | Implemented and locally validated              | Registry, all filters, deterministic classifier, four modes, config-driven scoring/cost, explainable persisted decisions                                         |
-| Section 4 — Session routing, fallback, and escalation         | Implemented and locally validated              | Sticky sessions, hysteresis, bounded safe fallback, model/provider circuits, outcomes, persisted switches                                                        |
-| Section 5 — Claude Code integration                           | Implemented and locally validated              | Current beta protocol, setup/bypass/undo, 20-turn session test, two provider families, real Claude Code 2.1.212 `Read` tool loop                                 |
-| Section 6 — Generic endpoints and broader models              | Implemented and locally validated              | Responses and Chat ingress, official OpenAI SDK, Gemini and generic-compatible adapters, local HTTP participation, conformance                                   |
-| Section 7 — CLI completion and operator experience            | Implemented and locally validated              | Encrypted BYOK, safe setup/undo/uninstall, managed lifecycle, diagnostics, OpenAI/Claude client configuration, clean npm install                                 |
-| Section 8 — Usage, cost, and savings analytics                | Implemented and locally validated              | Retry-inclusive ledger, declared baseline, immutable price evidence, aggregate/request APIs, spend and savings console                                           |
-| Section 9 — Evaluation platform and router calibration        | Implemented; evidence pending                  | LangGraph agent/tool/verifier harness, actual ledger usage, PostgreSQL runs, calibration; real multi-provider corpus not yet run                                 |
-| Section 10 — React operator console                           | Implemented and locally validated              | Providers, models, routing decisions, sessions, spend, savings, evaluations, failures, health, and calibration                                                   |
-| Section 11 — Production hardening                             | Implemented locally; external evidence pending | Encrypted transcripts/config snapshots, load and security gates, live migrations, hardened Compose; remote matrix, soak, recovery, and independent review remain |
-| Section 12 — Commercial platform                              | Excluded from current goal                     | Payments, subscriptions, enterprise SSO/SCIM, and marketplace billing are intentionally out of scope                                                             |
+| Section                                                       | Status                                               | Evidence                                                                                                                                                                           |
+| ------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Section 0 — Foundation and specifications                     | Implemented and locally validated                    | npm workspace, strict TypeScript, Prisma schema/client, configuration, CI, Docker Compose, documentation                                                                           |
+| Section 1 — Gateway skeleton and Anthropic-compatible ingress | Implemented and locally validated                    | Express gateway, fake provider, `/v1/messages`, JSON/SSE translation, tools, auth, cancellation, readiness, metrics, golden tests                                                  |
+| Section 2 — Anthropic and OpenAI provider adapters            | Implemented and locally validated                    | Native Messages/Responses adapters, text/tools, usage ledger, stable errors, cancellation, deadlines, bounded retries                                                              |
+| Section 3 — Working routing engine                            | Implemented and locally validated                    | Registry, all filters, deterministic classifier, four modes, config-driven scoring/cost, explainable persisted decisions                                                           |
+| Section 4 — Session routing, fallback, and escalation         | Implemented and locally validated                    | Sticky sessions, hysteresis, bounded safe fallback, model/provider circuits, outcomes, persisted switches                                                                          |
+| Section 5 — Claude Code integration                           | Implemented and locally validated                    | Current beta protocol, setup/bypass/undo, 20-turn session test, two provider families, real Claude Code 2.1.212 `Read` tool loop                                                   |
+| Section 6 — Generic endpoints and broader models              | Implemented and locally validated                    | Responses and Chat ingress, official OpenAI SDK, Gemini and generic-compatible adapters, local HTTP participation, conformance                                                     |
+| Section 7 — CLI completion and operator experience            | Implemented and locally validated                    | Encrypted BYOK, safe setup/undo/uninstall, managed lifecycle, diagnostics, OpenAI/Claude client configuration, clean npm install                                                   |
+| Section 8 — Usage, cost, and savings analytics                | Implemented and locally validated                    | Retry-inclusive ledger, declared baseline, immutable price evidence, aggregate/request APIs, spend and savings console                                                             |
+| Section 9 — Evaluation platform and router calibration        | Implemented; evidence pending                        | LangGraph agent/tool/verifier harness, actual ledger usage, PostgreSQL runs, calibration; real multi-provider corpus not yet run                                                   |
+| Section 10 — React operator console                           | Implemented and locally validated                    | Providers, models, routing decisions, sessions, spend, savings, evaluations, failures, health, and calibration                                                                     |
+| Section 11 — Production hardening                             | Self-contained gates proven; external review pending | Encrypted transcripts, mixed-stream PostgreSQL soak, recovery drill, load/security gates, hardened Compose, incident runbook, and green remote OS/DB matrix; signing/review remain |
+| Section 12 — Commercial platform                              | Excluded from current goal                           | Payments, subscriptions, enterprise SSO/SCIM, and marketplace billing are intentionally out of scope                                                                               |
 
-Current verification: 48 test files and 246 tests pass. Build, strict type checking, lint,
+Current verification: 49 test files and 250 tests pass. Build, strict type checking, lint,
 formatting, Prisma generation/validation, full-tree and production dependency audits, router configuration
 validation, concurrent load smoke, isolated global-package installation, and the offline
 real-Claude-Code smoke test pass locally. The official OpenAI Node SDK passes both
@@ -69,12 +69,12 @@ Responses JSON/SSE and Chat Completions requests against the router. Native Gemi
 OpenAI-compatible server participate through real HTTP mock-provider boundaries, and unsupported
 model capabilities are rejected before contacting the upstream.
 
-The hardened Docker Compose definition, production image, one-shot migration service, and all eight
+The hardened Docker Compose definition, production image, one-shot migration service, and all nine
 migrations pass locally against disposable PostgreSQL 17. The healthy containerized gateway routes
 and persists a request, redacts its gateway key in logs, and tears down cleanly. CI provisions
 PostgreSQL, applies migrations, starts the managed gateway, routes a database-backed request, and
-builds the runtime image. Cross-platform workflow evidence becomes authoritative only after the
-pushed GitHub Actions matrix succeeds.
+builds the runtime image. [GitHub Actions run 32745402611](https://github.com/vasantkr97/vartma.ai/actions/runs/32745402611)
+passes the complete Ubuntu, macOS, Windows, and PostgreSQL integration matrix.
 
 The parity goal is not yet proven complete. It still requires real authenticated calls across the
 named provider families, a sufficiently large identical-task fixed-versus-Balanced-versus-Eco
@@ -1574,7 +1574,7 @@ Acceptance:
 
 ### Section 11 — Production hardening
 
-**Status:** Implemented and locally validated where self-contained; external evidence remains
+**Status:** Implemented and cross-platform validated where self-contained; external evidence remains
 
 **Estimated effort:** 2–4 weeks initially, then continuous
 
@@ -1602,19 +1602,28 @@ Acceptance:
 Implemented:
 
 - Bounded 400-request concurrent load smoke with an enforced p95 limit and zero-failure gate.
+- PostgreSQL-backed 15-minute mixed JSON/SSE soak: 17,504 requests, 19.4 requests/second, 1,598.3 ms
+  p95, 51.8 ms event-loop p99, 392.7 MiB peak RSS, 152.6 MiB database growth, and zero failures.
+- Deterministic 200-pattern arbitrary UTF-8 stream fragmentation fuzzing and a 16 MiB SSE-event
+  bound.
 - Malformed streams, timeouts, cancellation, rate limits, retry/fallback, circuit breaker, and
   no-replay-after-visible-output tests.
 - Full-tree and production-only dependency audits with zero known vulnerabilities.
 - Encrypted credentials/transcripts, redacted structured logs, required deployment secrets,
   production-dependency-only image, no-new-privileges, and dropped Linux capabilities.
 - Live PostgreSQL 17 migration, readiness, persistence, and complete Compose lifecycle proof.
-- Windows/Linux/macOS CI matrix plus a PostgreSQL integration job.
+- Fresh-instance custom-format backup/restore proof for all nine migrations, a Vartma session, and
+  its authenticated encrypted canonical transcript, plus incident, credential rotation, and
+  rollback runbooks.
+- Private vulnerability reporting and an owned security-finding response policy.
+- Windows/Linux/macOS CI matrix plus a PostgreSQL integration job; all four jobs pass in GitHub
+  Actions run `32745402611`.
 
 Still required:
 
-- Observe the pushed cross-platform CI matrix, run a sustained production-like soak, demonstrate
-  backup restoration, complete independent security review, and establish signed release/rollback
-  evidence before a public production claim.
+- Complete independent security review and establish signed release/rollback evidence before a
+  public production claim. Continue longer production-shaped soak and recovery drills as recurring
+  operational evidence.
 
 ### Section 12 — Commercial and enterprise product
 

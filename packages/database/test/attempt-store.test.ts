@@ -115,7 +115,7 @@ describe("PrismaAttemptStore usage ledger", () => {
 
   it("rejects changed prices under an existing price-book version", async () => {
     const transaction = transactionMock();
-    transaction.priceBookEntry.upsert.mockResolvedValue({
+    transaction.priceBookEntry.findUniqueOrThrow.mockResolvedValue({
       ...priceEntry(),
       outputPricePerMillion: decimal("9"),
     });
@@ -144,20 +144,38 @@ describe("PrismaAttemptStore usage ledger", () => {
 });
 
 function transactionMock() {
+  let storedEntry = priceEntry();
   return {
     priceBook: {
-      upsert: vi.fn(() => Promise.resolve({ version: "prices-v1", currency: "USD" })),
+      createMany: vi.fn(() => Promise.resolve({ count: 1 })),
+      findUniqueOrThrow: vi.fn(() => Promise.resolve({ version: "prices-v1", currency: "USD" })),
     },
     priceBookEntry: {
-      upsert: vi.fn((input: { create: ReturnType<typeof priceEntry> }) =>
-        Promise.resolve({
-          ...input.create,
-          inputPricePerMillion: decimal(String(input.create.inputPricePerMillion)),
-          cachedInputPricePerMillion: decimal(String(input.create.cachedInputPricePerMillion)),
-          outputPricePerMillion: decimal(String(input.create.outputPricePerMillion)),
-          reasoningPricePerMillion: decimal(String(input.create.reasoningPricePerMillion)),
-        }),
+      createMany: vi.fn(
+        (input: {
+          data: Array<{
+            upstreamModel: string;
+            inputPricePerMillion: number;
+            cachedInputPricePerMillion: number;
+            outputPricePerMillion: number;
+            reasoningPricePerMillion: number;
+            effectiveFrom: Date;
+            verifiedAt: Date;
+            source: string;
+          }>;
+        }) => {
+          const created = input.data[0]!;
+          storedEntry = {
+            ...created,
+            inputPricePerMillion: decimal(String(created.inputPricePerMillion)),
+            cachedInputPricePerMillion: decimal(String(created.cachedInputPricePerMillion)),
+            outputPricePerMillion: decimal(String(created.outputPricePerMillion)),
+            reasoningPricePerMillion: decimal(String(created.reasoningPricePerMillion)),
+          };
+          return Promise.resolve({ count: 1 });
+        },
       ),
+      findUniqueOrThrow: vi.fn(() => Promise.resolve(storedEntry)),
     },
     request: {
       create: vi.fn(),

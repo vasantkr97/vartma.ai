@@ -93,6 +93,13 @@ jobs:
       - name: Stop managed gateway
         if: always()
         run: npm run vartma -- stop --config configs/vartma.example.yaml
+      - name: Run streaming endurance gate
+        run: npm run smoke:soak
+        env:
+          VARTMA_SOAK_DURATION_MS: 60000
+          VARTMA_SOAK_TARGET_RPS: 20
+      - name: Demonstrate PostgreSQL backup restoration
+        run: npm run smoke:postgres-recovery
       - name: Validate hardened Compose deployment
         run: docker compose config --quiet
         env:

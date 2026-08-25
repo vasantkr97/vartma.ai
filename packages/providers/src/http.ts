@@ -58,6 +58,7 @@ interface ErrorBody {
 }
 
 const retryableStatuses = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+const defaultMaximumSseEventCharacters = 16 * 1024 * 1024;
 
 export function resolveHttpProviderOptions(
   options: HttpProviderOptions,
@@ -221,7 +222,13 @@ export async function requestSse(options: RequestSseOptions): Promise<Response> 
   }
 }
 
-export async function* parseSse(body: ReadableStream<Uint8Array>): AsyncIterable<SseMessage> {
+export async function* parseSse(
+  body: ReadableStream<Uint8Array>,
+  maximumEventCharacters = defaultMaximumSseEventCharacters,
+): AsyncIterable<SseMessage> {
+  if (!Number.isSafeInteger(maximumEventCharacters) || maximumEventCharacters <= 0) {
+    throw new Error("Maximum SSE event characters must be a positive safe integer.");
+  }
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -233,6 +240,7 @@ export async function* parseSse(body: ReadableStream<Uint8Array>): AsyncIterable
 
       let boundary = findEventBoundary(buffer);
       while (boundary) {
+        assertSseEventSize(boundary.index, maximumEventCharacters);
         const rawEvent = buffer.slice(0, boundary.index).replace(/\r\n?/g, "\n");
         buffer = buffer.slice(boundary.index + boundary.length);
         const message = parseSseMessage(rawEvent);
@@ -241,6 +249,8 @@ export async function* parseSse(body: ReadableStream<Uint8Array>): AsyncIterable
         }
         boundary = findEventBoundary(buffer);
       }
+
+      assertSseEventSize(buffer.length, maximumEventCharacters);
 
       if (done) {
         if (buffer.trim()) {
@@ -254,6 +264,16 @@ export async function* parseSse(body: ReadableStream<Uint8Array>): AsyncIterable
     }
   } finally {
     reader.releaseLock();
+  }
+}
+
+function assertSseEventSize(characters: number, maximumEventCharacters: number): void {
+  if (characters > maximumEventCharacters) {
+    throw new ProviderError(
+      `Provider event stream exceeded the ${String(maximumEventCharacters)} character event limit.`,
+      "protocol",
+      false,
+    );
   }
 }
 

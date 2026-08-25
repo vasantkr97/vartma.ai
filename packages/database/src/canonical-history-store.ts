@@ -1,11 +1,11 @@
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
+import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, scryptSync } from "node:crypto";
 
 import type { CanonicalMessage } from "@vartma/canonical";
 import type { CanonicalHistoryStore } from "@vartma/routing";
 
 import type { RouterDatabase } from "./index.js";
 
-interface EncryptedTranscript {
+interface EncryptedTranscriptV1 {
   version: 1;
   kdf: "scrypt";
   cipher: "aes-256-gcm";
@@ -15,8 +15,23 @@ interface EncryptedTranscript {
   ciphertext: string;
 }
 
+interface EncryptedTranscriptV2 {
+  version: 2;
+  kdf: "scrypt-hkdf-sha256";
+  cipher: "aes-256-gcm";
+  salt: string;
+  iv: string;
+  authTag: string;
+  ciphertext: string;
+}
+
+type EncryptedTranscript = EncryptedTranscriptV1 | EncryptedTranscriptV2;
+
+const transcriptRootSalt = Buffer.from("vartma-canonical-transcript-root-v2", "utf8");
+
 export class PrismaEncryptedCanonicalHistoryStore implements CanonicalHistoryStore {
   readonly #masterKey: string;
+  readonly #rootKey: Buffer;
 
   public constructor(
     private readonly database: RouterDatabase,
@@ -28,6 +43,9 @@ export class PrismaEncryptedCanonicalHistoryStore implements CanonicalHistorySto
       );
     }
     this.#masterKey = masterKey;
+    // Scrypt's intentionally expensive passphrase hardening runs once per store, not once per
+    // routed request. Per-transcript random salts are expanded from this root with HKDF.
+    this.#rootKey = scryptSync(masterKey, transcriptRootSalt, 32);
   }
 
   public async get(sessionId: string): Promise<CanonicalMessage[] | undefined> {
@@ -36,24 +54,24 @@ export class PrismaEncryptedCanonicalHistoryStore implements CanonicalHistorySto
       select: { payload: true },
     });
     return transcript
-      ? decryptTranscript(transcript.payload, sessionId, this.#masterKey)
+      ? decryptTranscript(transcript.payload, sessionId, this.#masterKey, this.#rootKey)
       : undefined;
   }
 
   public async save(sessionId: string, messages: CanonicalMessage[]): Promise<void> {
-    const payload = encryptTranscript(messages, sessionId, this.#masterKey);
+    const payload = encryptTranscript(messages, sessionId, this.#rootKey);
     await this.database.canonicalTranscript.upsert({
       where: { sessionId },
       create: {
         sessionId,
         payload,
         messageCount: messages.length,
-        encryptionVersion: 1,
+        encryptionVersion: 2,
       },
       update: {
         payload,
         messageCount: messages.length,
-        encryptionVersion: 1,
+        encryptionVersion: 2,
       },
     });
   }
@@ -62,19 +80,19 @@ export class PrismaEncryptedCanonicalHistoryStore implements CanonicalHistorySto
 function encryptTranscript(
   messages: CanonicalMessage[],
   sessionId: string,
-  masterKey: string,
+  rootKey: Buffer,
 ): string {
   const salt = randomBytes(16);
   const iv = randomBytes(12);
-  const key = scryptSync(masterKey, salt, 32);
+  const key = deriveTranscriptKey(rootKey, salt, sessionId);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   cipher.setAAD(transcriptAdditionalData(sessionId));
   const plaintext = Buffer.from(JSON.stringify(messages), "utf8");
   try {
     const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-    const envelope: EncryptedTranscript = {
-      version: 1,
-      kdf: "scrypt",
+    const envelope: EncryptedTranscriptV2 = {
+      version: 2,
+      kdf: "scrypt-hkdf-sha256",
       cipher: "aes-256-gcm",
       salt: salt.toString("base64"),
       iv: iv.toString("base64"),
@@ -92,10 +110,15 @@ function decryptTranscript(
   payload: string,
   sessionId: string,
   masterKey: string,
+  rootKey: Buffer,
 ): CanonicalMessage[] {
   try {
     const envelope = parseEnvelope(payload);
-    const key = scryptSync(masterKey, Buffer.from(envelope.salt, "base64"), 32);
+    const salt = Buffer.from(envelope.salt, "base64");
+    const key =
+      envelope.version === 1
+        ? scryptSync(masterKey, salt, 32)
+        : deriveTranscriptKey(rootKey, salt, sessionId);
     try {
       const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.iv, "base64"));
       decipher.setAAD(transcriptAdditionalData(sessionId));
@@ -129,9 +152,7 @@ function parseEnvelope(payload: string): EncryptedTranscript {
     !value ||
     typeof value !== "object" ||
     !("version" in value) ||
-    value.version !== 1 ||
     !("kdf" in value) ||
-    value.kdf !== "scrypt" ||
     !("cipher" in value) ||
     value.cipher !== "aes-256-gcm" ||
     !("salt" in value) ||
@@ -145,7 +166,19 @@ function parseEnvelope(payload: string): EncryptedTranscript {
   ) {
     throw new Error("Unsupported encrypted transcript envelope.");
   }
+  const supportedVersion =
+    (value.version === 1 && value.kdf === "scrypt") ||
+    (value.version === 2 && value.kdf === "scrypt-hkdf-sha256");
+  if (!supportedVersion) {
+    throw new Error("Unsupported encrypted transcript envelope.");
+  }
   return value as EncryptedTranscript;
+}
+
+function deriveTranscriptKey(rootKey: Buffer, salt: Buffer, sessionId: string): Buffer {
+  return Buffer.from(
+    hkdfSync("sha256", rootKey, salt, Buffer.from(`session:${sessionId}`, "utf8"), 32),
+  );
 }
 
 function isCanonicalMessages(value: unknown): value is CanonicalMessage[] {

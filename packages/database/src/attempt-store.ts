@@ -360,20 +360,41 @@ async function ensurePriceBookEntry(
   transaction: Prisma.TransactionClient,
   input: PriceSnapshotInput,
 ): Promise<void> {
-  const priceBook = await transaction.priceBook.upsert({
+  await transaction.priceBook.createMany({
+    data: [
+      {
+        version: input.priceBookVersion,
+        currency: input.pricing.currency,
+      },
+    ],
+    skipDuplicates: true,
+  });
+  const priceBook = await transaction.priceBook.findUniqueOrThrow({
     where: { version: input.priceBookVersion },
-    create: {
-      version: input.priceBookVersion,
-      currency: input.pricing.currency,
-    },
-    update: {},
   });
   if (priceBook.currency !== input.pricing.currency) {
     throw new Error(
       `Price book "${input.priceBookVersion}" uses ${priceBook.currency}, not ${input.pricing.currency}. Use a new price-book version for a different currency.`,
     );
   }
-  const entry = await transaction.priceBookEntry.upsert({
+  const entryData = {
+    priceBookVersion: input.priceBookVersion,
+    provider: input.provider,
+    model: input.model,
+    upstreamModel: input.upstreamModel,
+    inputPricePerMillion: input.pricing.inputPerMillion,
+    cachedInputPricePerMillion: input.pricing.cachedInputPerMillion,
+    outputPricePerMillion: input.pricing.outputPerMillion,
+    reasoningPricePerMillion: input.pricing.reasoningPerMillion ?? input.pricing.outputPerMillion,
+    effectiveFrom: dateOnly(input.pricing.effectiveFrom),
+    verifiedAt: dateOnly(input.pricing.verifiedAt),
+    source: input.pricing.source,
+  };
+  await transaction.priceBookEntry.createMany({
+    data: [entryData],
+    skipDuplicates: true,
+  });
+  const entry = await transaction.priceBookEntry.findUniqueOrThrow({
     where: {
       priceBookVersion_provider_model: {
         priceBookVersion: input.priceBookVersion,
@@ -381,20 +402,6 @@ async function ensurePriceBookEntry(
         model: input.model,
       },
     },
-    create: {
-      priceBookVersion: input.priceBookVersion,
-      provider: input.provider,
-      model: input.model,
-      upstreamModel: input.upstreamModel,
-      inputPricePerMillion: input.pricing.inputPerMillion,
-      cachedInputPricePerMillion: input.pricing.cachedInputPerMillion,
-      outputPricePerMillion: input.pricing.outputPerMillion,
-      reasoningPricePerMillion: input.pricing.reasoningPerMillion ?? input.pricing.outputPerMillion,
-      effectiveFrom: dateOnly(input.pricing.effectiveFrom),
-      verifiedAt: dateOnly(input.pricing.verifiedAt),
-      source: input.pricing.source,
-    },
-    update: {},
   });
   const same =
     entry.upstreamModel === input.upstreamModel &&

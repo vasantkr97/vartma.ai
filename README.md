@@ -249,6 +249,8 @@ npm run format:check
 npm run prisma:validate
 npm run smoke:claude-code
 npm run smoke:load
+npm run smoke:soak
+npm run smoke:postgres-recovery
 npm run smoke:clean-install
 npm audit --audit-level=high
 npm audit --omit=dev --audit-level=high
@@ -267,6 +269,9 @@ docker compose up --build --wait
 PowerShell uses `$env:NAME = "value"` for the same variables. Compose fails closed when any
 required deployment secret is absent; the repository does not contain a working production
 password or gateway key.
+
+Production alerting, provider-outage response, credential rotation, database backup/restore, and
+release rollback are documented in [operations and recovery](./docs/operations-and-recovery.md).
 
 Compose waits for PostgreSQL, applies checked-in Prisma migrations in a one-shot service, then
 starts the production-dependency-only gateway image on port 8080. Provider keys and

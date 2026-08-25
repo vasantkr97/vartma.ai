@@ -246,7 +246,7 @@ model CanonicalTranscript {
   sessionId         String   @id
   payload           String   @db.Text
   messageCount      Int
-  encryptionVersion Int      @default(1)
+  encryptionVersion Int      @default(2)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
