@@ -73,7 +73,7 @@ The hardened Docker Compose definition, production image, one-shot migration ser
 migrations pass locally against disposable PostgreSQL 17. The healthy containerized gateway routes
 and persists a request, redacts its gateway key in logs, and tears down cleanly. CI provisions
 PostgreSQL, applies migrations, starts the managed gateway, routes a database-backed request, and
-builds the runtime image. [GitHub Actions run 32745402611](https://github.com/vasantkr97/vartma.ai/actions/runs/32745402611)
+builds the runtime image. [GitHub Actions run 32816599375](https://github.com/vasantkr97/vartma.ai/actions/runs/32816599375)
 passes the complete Ubuntu, macOS, Windows, and PostgreSQL integration matrix.
 
 The parity goal is not yet proven complete. It still requires real authenticated calls across the
@@ -1617,7 +1617,7 @@ Implemented:
   rollback runbooks.
 - Private vulnerability reporting and an owned security-finding response policy.
 - Windows/Linux/macOS CI matrix plus a PostgreSQL integration job; all four jobs pass in GitHub
-  Actions run `32745402611`.
+  Actions run `32816599375`.
 
 Still required:
 
