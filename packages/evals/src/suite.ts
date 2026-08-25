@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { dirname, relative, resolve, sep } from "node:path";
 
 import { TASK_CLASSES } from "@vartma/routing";
 import { parse } from "yaml";
@@ -15,6 +16,13 @@ const commandSchema = z
       .positive()
       .max(30 * 60 * 1_000)
       .default(120_000),
+  })
+  .strict();
+
+const verificationFileSchema = z
+  .object({
+    source: z.string().min(1),
+    destination: z.string().min(1),
   })
   .strict();
 
@@ -43,6 +51,7 @@ export const evaluationSuiteSchema = z
             prompt: z.string().min(1),
             allowedCommands: z.array(z.string().min(1)).default([]),
             setup: z.array(commandSchema).default([]),
+            verificationFiles: z.array(verificationFileSchema).default([]),
             verify: z.array(commandSchema).min(1),
           })
           .strict(),
@@ -72,12 +81,81 @@ export async function loadEvaluationSuite(path: string): Promise<{
   path: string;
   directory: string;
   suite: EvaluationSuite;
+  digest: string;
 }> {
   const suitePath = resolve(path);
-  const value: unknown = parse(await readFile(suitePath, "utf8"));
+  const suiteSource = await readFile(suitePath);
+  const value: unknown = parse(suiteSource.toString("utf8"));
+  const suite = evaluationSuiteSchema.parse(value);
   return {
     path: suitePath,
     directory: dirname(suitePath),
-    suite: evaluationSuiteSchema.parse(value),
+    suite,
+    digest: await evaluationSuiteDigest(suitePath, suiteSource, suite),
   };
+}
+
+async function evaluationSuiteDigest(
+  suitePath: string,
+  suiteSource: Buffer,
+  suite: EvaluationSuite,
+): Promise<string> {
+  const hash = createHash("sha256");
+  hashEntry(hash, "suite.yaml", suiteSource);
+  const suiteDirectory = dirname(suitePath);
+  for (const task of [...suite.tasks].sort((left, right) => left.id.localeCompare(right.id))) {
+    const fixture = await realpath(resolve(suiteDirectory, task.fixture));
+    if (!(await lstat(fixture)).isDirectory()) {
+      throw new Error(`Evaluation fixture "${task.fixture}" must be a directory.`);
+    }
+    for (const file of await regularFiles(fixture)) {
+      hashEntry(
+        hash,
+        `fixture:${task.id}:${portablePath(relative(fixture, file))}`,
+        await readFile(file),
+      );
+    }
+    for (const [index, verificationFile] of task.verificationFiles.entries()) {
+      const source = await realpath(resolve(suiteDirectory, verificationFile.source));
+      if (!(await lstat(source)).isFile()) {
+        throw new Error(`Verification source "${verificationFile.source}" must be a regular file.`);
+      }
+      hashEntry(
+        hash,
+        `verification:${task.id}:${String(index)}:${verificationFile.destination}`,
+        await readFile(source),
+      );
+    }
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+async function regularFiles(directory: string): Promise<string[]> {
+  const output: string[] = [];
+  const visit = async (current: string): Promise<void> => {
+    const entries = await readdir(current, { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      const path = resolve(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        throw new Error(`Evaluation fixtures may not contain symbolic links: ${path}`);
+      }
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile()) output.push(path);
+    }
+  };
+  await visit(directory);
+  return output;
+}
+
+function hashEntry(hash: ReturnType<typeof createHash>, name: string, content: Buffer): void {
+  hash.update(name, "utf8");
+  hash.update("\0", "utf8");
+  hash.update(String(content.length), "utf8");
+  hash.update("\0", "utf8");
+  hash.update(content);
+  hash.update("\0", "utf8");
+}
+
+function portablePath(path: string): string {
+  return path.split(sep).join("/");
 }

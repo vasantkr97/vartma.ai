@@ -475,7 +475,10 @@ function Evaluations({ snapshot }: { snapshot: ConsoleSnapshot }) {
                       <code title={run.id}>{shortId(run.id)}</code>
                     </td>
                     <td>
-                      {run.dataset}@{run.datasetVersion}
+                      <span title={run.datasetDigest}>
+                        {run.dataset}@{run.datasetVersion}{" "}
+                        <code>{run.datasetDigest.slice(7, 19)}</code>
+                      </span>
                     </td>
                     <td>{run.target}</td>
                     <td>

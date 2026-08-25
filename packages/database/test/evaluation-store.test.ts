@@ -36,6 +36,7 @@ describe("PrismaEvaluationStore", () => {
     expect(resultUpsert).toHaveBeenCalledTimes(2);
     expect(summary).toMatchObject({
       id: "eval-run-1",
+      datasetDigest: `sha256:${"c".repeat(64)}`,
       target: "router:balanced",
       tasks: 2,
       solved: 1,
@@ -46,6 +47,7 @@ describe("PrismaEvaluationStore", () => {
       p95LatencyMs: 200,
       routingDistribution: { "deepseek/chat": 1, "openai/frontier": 1 },
     });
+    expect(runUpsert.mock.calls[0]?.[0].create.datasetDigest).toBe(`sha256:${"c".repeat(64)}`);
   });
 
   it("lists persisted summaries and rejects incomparable records in one run", async () => {
@@ -58,6 +60,7 @@ describe("PrismaEvaluationStore", () => {
               id: "eval-run-1",
               dataset: "coding-public",
               datasetVersion: "1.0.0",
+              datasetDigest: `sha256:${"c".repeat(64)}`,
               harnessVersion: "graph-v1",
               targetKind: "fixed",
               targetValue: "openai/frontier",
@@ -103,6 +106,7 @@ function result(
     environment: {
       dataset: "coding-public",
       datasetVersion: "1.0.0",
+      datasetDigest: `sha256:${"c".repeat(64)}`,
       harnessVersion: "graph-v1",
       promptTemplateVersion: "prompt-v1",
       timeoutMs: 300_000,

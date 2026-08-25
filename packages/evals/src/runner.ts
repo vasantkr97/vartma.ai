@@ -81,6 +81,7 @@ const AgentState = Annotation.Root({
 export interface EvaluationRunOptions {
   suite: EvaluationSuite;
   suiteDirectory: string;
+  datasetDigest: string;
   target: EvaluationTarget;
   gatewayUrl: string;
   apiKey: string;
@@ -192,6 +193,7 @@ async function runEvaluationTask(
       environment: {
         dataset: options.suite.dataset,
         datasetVersion: options.suite.datasetVersion,
+        datasetDigest: options.datasetDigest,
         harnessVersion: options.suite.harnessVersion,
         promptTemplateVersion: options.suite.promptTemplateVersion,
         timeoutMs: options.suite.timeoutMs,
@@ -282,6 +284,7 @@ function createAgentGraph(
     };
   };
   const verifyNode = async () => {
+    await installVerificationFiles(task, options.suiteDirectory, workspace);
     const outputs: string[] = [];
     let passed = true;
     for (const command of task.verify) {
@@ -308,6 +311,22 @@ function createAgentGraph(
     .addEdge("tools", "model")
     .addEdge("verify", END)
     .compile();
+}
+
+async function installVerificationFiles(
+  task: EvaluationTask,
+  suiteDirectory: string,
+  workspace: string,
+): Promise<void> {
+  for (const verificationFile of task.verificationFiles) {
+    const source = await realpath(resolve(suiteDirectory, verificationFile.source));
+    if (!(await lstat(source)).isFile()) {
+      throw new Error(`Verification source "${verificationFile.source}" must be a regular file.`);
+    }
+    const destination = await safeWritablePath(workspace, verificationFile.destination);
+    await mkdir(dirname(destination), { recursive: true });
+    await cp(source, destination, { errorOnExist: false, force: true });
+  }
 }
 
 async function callGateway(

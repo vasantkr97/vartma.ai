@@ -45,6 +45,8 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run smoke:load
+      - run: npm run smoke:benchmark-corpus
+      - run: node scripts/evaluation-matrix.mjs --fixed fake/default --modes balanced,eco --plan
       - run: npm run smoke:clean-install
 
   postgres-integration:

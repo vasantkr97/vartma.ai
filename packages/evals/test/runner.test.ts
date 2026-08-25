@@ -6,12 +6,19 @@ import { describe, expect, it, vi } from "vitest";
 
 import { evaluationSuiteSchema, runEvaluationSuite } from "../src/index.js";
 
+const datasetDigest = `sha256:${"a".repeat(64)}`;
+
 describe("LangGraph evaluation runner", () => {
   it("runs a tool loop in a disposable fixture, verifies it, and records actual usage", async () => {
     const directory = await mkdtemp(join(tmpdir(), "vartma-eval-runner-"));
     const fixture = join(directory, "fixture");
     await mkdir(fixture);
     await writeFile(join(fixture, "value.txt"), "old\n", "utf8");
+    await writeFile(
+      join(directory, "hidden-verifier.mjs"),
+      "import fs from 'node:fs'; process.exit(fs.readFileSync('value.txt', 'utf8') === 'new\\n' ? 0 : 1);\n",
+      "utf8",
+    );
     const modelRequests: Array<Record<string, unknown>> = [];
     const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -19,8 +26,8 @@ describe("LangGraph evaluation runner", () => {
         return Promise.resolve(
           Response.json({
             totals: {
-              requestCount: 2,
-              attemptCount: 2,
+              requestCount: 3,
+              attemptCount: 3,
               inputTokens: "120",
               cachedInputTokens: "40",
               outputTokens: "30",
@@ -38,12 +45,21 @@ describe("LangGraph evaluation runner", () => {
           ? [
               {
                 type: "tool_use",
-                id: "write-1",
-                name: "write_file",
-                input: { path: "value.txt", content: "new\n" },
+                id: "list-1",
+                name: "list_files",
+                input: { path: "." },
               },
             ]
-          : [{ type: "text", text: "Finished." }];
+          : modelRequests.length === 2
+            ? [
+                {
+                  type: "tool_use",
+                  id: "write-1",
+                  name: "write_file",
+                  input: { path: "value.txt", content: "new\n" },
+                },
+              ]
+            : [{ type: "text", text: "Finished." }];
       return Promise.resolve(
         Response.json(
           {
@@ -51,7 +67,7 @@ describe("LangGraph evaluation runner", () => {
             type: "message",
             role: "assistant",
             content,
-            stop_reason: modelRequests.length === 1 ? "tool_use" : "end_turn",
+            stop_reason: modelRequests.length < 3 ? "tool_use" : "end_turn",
           },
           { headers: { "x-vartma-model": "fake/default" } },
         ),
@@ -71,13 +87,16 @@ describe("LangGraph evaluation runner", () => {
           taskClass: "small_edit",
           fixture: "fixture",
           prompt: "Replace old with new in value.txt.",
+          verificationFiles: [
+            {
+              source: "hidden-verifier.mjs",
+              destination: ".vartma-verifier/check.mjs",
+            },
+          ],
           verify: [
             {
               command: process.execPath,
-              args: [
-                "-e",
-                "const fs=require('fs');process.exit(fs.readFileSync('value.txt','utf8')==='new\\n'?0:1)",
-              ],
+              args: [".vartma-verifier/check.mjs"],
               timeoutMs: 5_000,
             },
           ],
@@ -88,6 +107,7 @@ describe("LangGraph evaluation runner", () => {
     const runs = await runEvaluationSuite({
       suite,
       suiteDirectory: directory,
+      datasetDigest,
       target: { kind: "fixed", model: "fake/default" },
       gatewayUrl: "http://127.0.0.1:8080",
       apiKey: "test-router-key",
@@ -101,16 +121,20 @@ describe("LangGraph evaluation runner", () => {
       taskId: "replace-value",
       selectedModel: "fake/default",
       success: true,
-      attempts: 2,
+      attempts: 3,
       actualCostUsd: "0.00125",
+      environment: { datasetDigest },
       inputTokens: 120,
       cachedInputTokens: 40,
       outputTokens: 30,
       reasoningTokens: 5,
     });
     expect(runs[0]?.workspacePath).toBeUndefined();
-    expect(JSON.stringify(modelRequests[1])).toContain("write-1");
-    expect(JSON.stringify(modelRequests[1])).toContain("Wrote value.txt");
+    expect(JSON.stringify(modelRequests[1])).toContain("list-1");
+    expect(JSON.stringify(modelRequests[1])).toContain("value.txt");
+    expect(JSON.stringify(modelRequests[1])).not.toContain(".vartma-verifier");
+    expect(JSON.stringify(modelRequests[2])).toContain("write-1");
+    expect(JSON.stringify(modelRequests[2])).toContain("Wrote value.txt");
     expect(modelRequests.every((request) => request["max_tokens"] === 4096)).toBe(true);
     expect(await readFile(join(fixture, "value.txt"), "utf8")).toBe("old\n");
   });
@@ -164,6 +188,7 @@ describe("LangGraph evaluation runner", () => {
     const [run] = await runEvaluationSuite({
       suite,
       suiteDirectory: directory,
+      datasetDigest,
       target: { kind: "fixed", model: "model/a" },
       gatewayUrl: "http://127.0.0.1:8080",
       apiKey: "test-router-key",
@@ -236,6 +261,7 @@ describe("LangGraph evaluation runner", () => {
     const [run] = await runEvaluationSuite({
       suite,
       suiteDirectory: directory,
+      datasetDigest,
       target: { kind: "fixed", model: "model/a" },
       gatewayUrl: "http://127.0.0.1:8080",
       apiKey: "test-router-key",

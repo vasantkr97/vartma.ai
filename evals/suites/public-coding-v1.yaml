@@ -1,0 +1,213 @@
+dataset: vartma-public-coding
+datasetVersion: "1.0.0"
+harnessVersion: vartma-langgraph-agent-v2-hidden-verifier
+promptTemplateVersion: coding-agent-v2
+timeoutMs: 600000
+maxAttempts: 3
+cacheEnabled: true
+maxAgentTurns: 30
+maxOutputTokens: 4096
+
+tasks:
+  - id: slug-normalization
+    taskClass: small_edit
+    fixture: ../fixtures/public-coding-v1/slug-normalization
+    prompt: Repair slugify in slug.mjs. Preserve its exported API and make normalization deterministic for punctuation, whitespace, and accented Latin text.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/slug-normalization.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: &nodeVerifier
+      - command: node
+        args: [.vartma-verifier/test.mjs]
+        timeoutMs: 10000
+
+  - id: async-pool-ordering
+    taskClass: debugging
+    fixture: ../fixtures/public-coding-v1/async-pool-ordering
+    prompt: Diagnose and repair mapPool in pool.mjs. It must enforce the concurrency limit, preserve input order, propagate failures, and handle empty input.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/async-pool-ordering.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: csv-state-machine
+    taskClass: test_repair
+    fixture: ../fixtures/public-coding-v1/csv-state-machine
+    prompt: Fix parseCsv in csv.mjs so the supplied behavior is correct for quoted fields, escaped quotes, embedded newlines, CRLF input, empty fields, and malformed unterminated quotes.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/csv-state-machine.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: lru-cache
+    taskClass: code_generation
+    fixture: ../fixtures/public-coding-v1/lru-cache
+    prompt: Implement the LruCache class described in README.md. Keep operations deterministic and preserve the public constructor, get, set, has, delete, size, and entries API.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/lru-cache.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: inventory-reservations
+    taskClass: multi_file_feature
+    fixture: ../fixtures/public-coding-v1/inventory-reservations
+    prompt: Implement atomic inventory reservations across the existing catalog, reservation service, and errors modules. Follow SPEC.md, preserve module boundaries, and prevent partial stock changes on failure.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/inventory-reservations.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: event-emitter-refactor
+    taskClass: refactoring
+    fixture: ../fixtures/public-coding-v1/event-emitter-refactor
+    prompt: Refactor EventBus in event-bus.mjs to remove duplicated listener-management logic without changing observable behavior. Fix any behavioral defects revealed while preserving the API.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/event-emitter-refactor.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: roman-numeral-tests
+    taskClass: test_generation
+    fixture: ../fixtures/public-coding-v1/roman-numeral-tests
+    prompt: Create test.mjs with a rigorous dependency-free test suite for roman.mjs. The tests must accept the correct implementation and reject plausible boundary, subtractive-notation, range, and type-checking mutants.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/roman-numeral-tests.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: retry-policy-documentation
+    taskClass: documentation
+    fixture: ../fixtures/public-coding-v1/retry-policy-documentation
+    prompt: Replace the placeholder RETRIES.md with precise operator documentation derived from retry-policy.mjs. Cover eligibility, delay calculation, Retry-After, jitter injection, examples, and non-replay safety.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/retry-policy-documentation.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: configuration-precedence
+    taskClass: repository_exploration
+    fixture: ../fixtures/public-coding-v1/configuration-precedence
+    prompt: Investigate why environment configuration does not override file settings consistently. Repair the appropriate module or modules while preserving defaults and rejecting invalid numeric ports.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/configuration-precedence.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: safe-workspace-path
+    taskClass: security_review
+    fixture: ../fixtures/public-coding-v1/safe-workspace-path
+    prompt: Security-review and repair resolveWorkspacePath in workspace-path.mjs. It must confine relative user paths to the workspace across traversal, sibling-prefix, absolute-path, separator, and encoded-input cases.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/safe-workspace-path.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: config-schema-migration
+    taskClass: migration
+    fixture: ../fixtures/public-coding-v1/config-schema-migration
+    prompt: Implement migrateConfig in migrate.mjs according to MIGRATION.md. Convert supported v1 records to v2 without mutation, preserve unknown metadata, make migration idempotent, and reject unsupported versions.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/config-schema-migration.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: dependency-scheduler
+    taskClass: long_autonomous_task
+    fixture: ../fixtures/public-coding-v1/dependency-scheduler
+    prompt: Complete the dependency-aware asynchronous scheduler across graph.mjs and scheduler.mjs. Follow SPEC.md, maximize safe parallelism, preserve result ordering, detect cycles and missing dependencies, and stop scheduling dependents after failure.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/dependency-scheduler.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: release-version-update
+    taskClass: simple_tool_operation
+    fixture: ../fixtures/public-coding-v1/release-version-update
+    prompt: Prepare release 2.4.0 by updating the existing release metadata files. Preserve formatting and unrelated fields; do not change runtime source.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/release-version-update.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: queue-architecture-record
+    taskClass: architecture_design
+    fixture: ../fixtures/public-coding-v1/queue-architecture-record
+    prompt: Write ADR.md for the durable job queue described in REQUIREMENTS.md. Make a concrete choice and cover delivery semantics, idempotency, ordering, retries, dead letters, backpressure, observability, recovery, and rejected alternatives.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/queue-architecture-record.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: cache-behavior-explanation
+    taskClass: explanation
+    fixture: ../fixtures/public-coding-v1/cache-behavior-explanation
+    prompt: Inspect cache.mjs and write EXPLANATION.md that accurately explains fresh hits, stale-while-revalidate, in-flight request coalescing, failure behavior, and one concrete timing example. Do not modify cache.mjs.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/cache-behavior-explanation.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: timezone-date-buckets
+    taskClass: debugging
+    fixture: ../fixtures/public-coding-v1/timezone-date-buckets
+    prompt: Repair bucketByUtcDay in buckets.mjs. Inputs may contain offsets around UTC midnight; output keys must be UTC calendar dates, values must preserve input order, and invalid timestamps must be rejected.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/timezone-date-buckets.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: json-pointer-parser
+    taskClass: test_repair
+    fixture: ../fixtures/public-coding-v1/json-pointer-parser
+    prompt: Repair getByPointer in pointer.mjs to implement RFC 6901 lookup behavior for objects and arrays, including escape sequences, the root pointer, missing paths, and malformed pointers.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/json-pointer-parser.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: topological-sort
+    taskClass: code_generation
+    fixture: ../fixtures/public-coding-v1/topological-sort
+    prompt: Implement stableTopologicalSort in topo.mjs. Preserve input order among simultaneously eligible nodes, include dependency-only nodes, reject missing dependency declarations, and report a useful cycle path.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/topological-sort.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: byte-formatting
+    taskClass: small_edit
+    fixture: ../fixtures/public-coding-v1/byte-formatting
+    prompt: Repair formatBytes in bytes.mjs according to README.md. Handle unit boundaries, precision, negative zero, invalid input, and both SI and IEC modes without changing the API.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/byte-formatting.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier
+
+  - id: sliding-window-limiter
+    taskClass: multi_file_feature
+    fixture: ../fixtures/public-coding-v1/sliding-window-limiter
+    prompt: Complete the deterministic sliding-window rate limiter described in SPEC.md across clock.mjs and limiter.mjs. Support independent keys, exact boundary eviction, retry-after reporting, and injected time without timers.
+    allowedCommands: [node]
+    verificationFiles:
+      - source: ../verifiers/public-coding-v1/sliding-window-limiter.test.mjs
+        destination: .vartma-verifier/test.mjs
+    verify: *nodeVerifier

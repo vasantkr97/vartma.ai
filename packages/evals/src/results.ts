@@ -16,6 +16,10 @@ const benchmarkEnvironmentSchema = z
   .object({
     dataset: z.string().min(1),
     datasetVersion: z.string().min(1),
+    datasetDigest: z
+      .string()
+      .regex(/^sha256:[a-f0-9]{64}$/u)
+      .default("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
     harnessVersion: z.string().min(1),
     promptTemplateVersion: z.string().min(1),
     timeoutMs: z.number().int().positive(),
@@ -86,6 +90,18 @@ export interface EvaluationReport {
   comparabilityIssues: string[];
   environmentSignatures: string[];
   targets: EvaluationTargetReport[];
+  baselineTarget?: string;
+  comparisons: EvaluationComparison[];
+}
+
+export interface EvaluationComparison {
+  baseline: string;
+  target: string;
+  passRateDelta: number;
+  qualityRetention: number | null;
+  actualCostDeltaUsd: string;
+  costSavingsRate: number | null;
+  costPerSolvedSavingsRate: number | null;
 }
 
 export function parseEvaluationJsonLines(input: string): EvaluationResult[] {
@@ -104,7 +120,10 @@ export function parseEvaluationJsonLines(input: string): EvaluationResult[] {
     });
 }
 
-export function summarizeEvaluation(results: EvaluationResult[]): EvaluationReport {
+export function summarizeEvaluation(
+  results: EvaluationResult[],
+  baselineTarget?: string,
+): EvaluationReport {
   const signatures = [...new Set(results.map(environmentSignature))].sort();
   const issues: string[] = [];
   if (results.length === 0) {
@@ -119,20 +138,56 @@ export function summarizeEvaluation(results: EvaluationResult[]): EvaluationRepo
   for (const [target, grouped] of groupBy(results, targetKey)) {
     taskSets.set(
       target,
-      [...new Set(grouped.map((result) => result.taskId))].sort().join("\u0000"),
+      grouped
+        .map((result) => result.taskId)
+        .sort()
+        .join("\u0000"),
     );
   }
   if (new Set(taskSets.values()).size > 1) {
     issues.push("targets do not contain the same task IDs");
   }
 
+  const runTaskKeys = new Set<string>();
+  for (const result of results) {
+    const key = `${result.runId}\u0000${targetKey(result)}\u0000${result.taskId}`;
+    if (runTaskKeys.has(key)) {
+      issues.push(
+        `duplicate result for run ${result.runId}, target ${targetKey(result)}, task ${result.taskId}`,
+      );
+      break;
+    }
+    runTaskKeys.add(key);
+  }
+  const taskClasses = new Map<string, TaskClass>();
+  for (const result of results) {
+    const existing = taskClasses.get(result.taskId);
+    if (existing && existing !== result.taskClass) {
+      issues.push(`task ${result.taskId} used inconsistent task classes`);
+      break;
+    }
+    taskClasses.set(result.taskId, result.taskClass);
+  }
+
+  const targets = [...groupBy(results, targetKey).entries()]
+    .map(([target, grouped]) => summarizeTarget(target, grouped))
+    .sort((left, right) => left.target.localeCompare(right.target));
+  const baseline = baselineTarget
+    ? targets.find((target) => target.target === baselineTarget)
+    : undefined;
+  if (baselineTarget && !baseline) issues.push(`baseline target ${baselineTarget} is missing`);
+
   return {
     comparable: issues.length === 0,
     comparabilityIssues: issues,
     environmentSignatures: signatures,
-    targets: [...groupBy(results, targetKey).entries()]
-      .map(([target, grouped]) => summarizeTarget(target, grouped))
-      .sort((left, right) => left.target.localeCompare(right.target)),
+    targets,
+    ...(baselineTarget ? { baselineTarget } : {}),
+    comparisons: baseline
+      ? targets
+          .filter((target) => target.target !== baseline.target)
+          .map((target) => compareTarget(baseline, target))
+      : [],
   };
 }
 
@@ -203,6 +258,34 @@ function summarizeTarget(target: string, results: EvaluationResult[]): Evaluatio
   };
 }
 
+function compareTarget(
+  baseline: EvaluationTargetReport,
+  target: EvaluationTargetReport,
+): EvaluationComparison {
+  const baselineCost = decimalToScaled(baseline.actualCostUsd);
+  const targetCost = decimalToScaled(target.actualCostUsd);
+  const baselineCostPerSolved = baseline.costPerSolvedTaskUsd
+    ? decimalToScaled(baseline.costPerSolvedTaskUsd)
+    : undefined;
+  const targetCostPerSolved = target.costPerSolvedTaskUsd
+    ? decimalToScaled(target.costPerSolvedTaskUsd)
+    : undefined;
+  return {
+    baseline: baseline.target,
+    target: target.target,
+    passRateDelta: target.passRate - baseline.passRate,
+    qualityRetention: baseline.passRate > 0 ? target.passRate / baseline.passRate : null,
+    actualCostDeltaUsd: scaledToDecimal(targetCost - baselineCost),
+    costSavingsRate: baselineCost > 0n ? 1 - Number(targetCost) / Number(baselineCost) : null,
+    costPerSolvedSavingsRate:
+      baselineCostPerSolved !== undefined &&
+      baselineCostPerSolved > 0n &&
+      targetCostPerSolved !== undefined
+        ? 1 - Number(targetCostPerSolved) / Number(baselineCostPerSolved)
+        : null,
+  };
+}
+
 function targetKey(result: EvaluationResult): string {
   return result.target.kind === "fixed"
     ? `fixed:${result.target.model}`
@@ -245,8 +328,10 @@ function decimalToScaled(value: string): bigint {
 }
 
 function scaledToDecimal(value: bigint): string {
+  const negative = value < 0n;
+  const magnitude = negative ? -value : value;
   const scale = 10n ** BigInt(COST_SCALE);
-  const whole = value / scale;
-  const fraction = (value % scale).toString().padStart(COST_SCALE, "0").replace(/0+$/u, "");
-  return `${whole.toString()}${fraction ? `.${fraction}` : ""}`;
+  const whole = magnitude / scale;
+  const fraction = (magnitude % scale).toString().padStart(COST_SCALE, "0").replace(/0+$/u, "");
+  return `${negative ? "-" : ""}${whole.toString()}${fraction ? `.${fraction}` : ""}`;
 }

@@ -233,6 +233,7 @@ describe("gateway", () => {
             id: "eval-run-1",
             dataset: "coding-public",
             datasetVersion: "1.0.0",
+            datasetDigest: `sha256:${"c".repeat(64)}`,
             harnessVersion: "graph-v1",
             target: "router:balanced",
             tasks: 20,

@@ -7,6 +7,7 @@ export interface PersistedEvaluationResultInput {
   environment: {
     dataset: string;
     datasetVersion: string;
+    datasetDigest: string;
     harnessVersion: string;
     promptTemplateVersion: string;
     timeoutMs: number;
@@ -31,6 +32,7 @@ export interface EvaluationRunSummary {
   id: string;
   dataset: string;
   datasetVersion: string;
+  datasetDigest: string;
   harnessVersion: string;
   target: string;
   tasks: number;
@@ -67,6 +69,7 @@ export class PrismaEvaluationStore implements EvaluationStore {
     const run = {
       dataset: identity.environment.dataset,
       datasetVersion: identity.environment.datasetVersion,
+      datasetDigest: identity.environment.datasetDigest,
       harnessVersion: identity.environment.harnessVersion,
       promptTemplateVersion: identity.environment.promptTemplateVersion,
       timeoutMs: identity.environment.timeoutMs,
@@ -165,6 +168,7 @@ function summarizeStoredRun(run: {
   id: string;
   dataset: string;
   datasetVersion: string;
+  datasetDigest: string;
   harnessVersion: string;
   targetKind: string;
   targetValue: string;
@@ -192,6 +196,7 @@ function summarizeStoredRun(run: {
     id: run.id,
     dataset: run.dataset,
     datasetVersion: run.datasetVersion,
+    datasetDigest: run.datasetDigest,
     harnessVersion: run.harnessVersion,
     target: `${run.targetKind}:${run.targetValue}`,
     tasks: run.results.length,

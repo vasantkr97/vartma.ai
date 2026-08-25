@@ -257,6 +257,7 @@ model EvaluationRun {
   id                    String   @id
   dataset               String
   datasetVersion        String
+  datasetDigest         String
   harnessVersion        String
   promptTemplateVersion String
   timeoutMs             Int

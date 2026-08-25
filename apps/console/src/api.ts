@@ -100,6 +100,7 @@ export interface EvaluationRunSummary {
   id: string;
   dataset: string;
   datasetVersion: string;
+  datasetDigest: string;
   harnessVersion: string;
   target: string;
   tasks: number;

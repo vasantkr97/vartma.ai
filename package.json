@@ -22,6 +22,8 @@
     "smoke:load": "npm run build && node scripts/load-smoke.mjs",
     "smoke:soak": "npm run build && node scripts/soak-smoke.mjs",
     "smoke:postgres-recovery": "npm run build && node scripts/postgres-recovery-smoke.mjs",
+    "smoke:benchmark-corpus": "npm run build && node scripts/benchmark-corpus-smoke.mjs",
+    "eval:matrix": "npm run build && node scripts/evaluation-matrix.mjs",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate:dev": "prisma migrate dev",

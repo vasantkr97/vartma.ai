@@ -18,8 +18,9 @@ does not exist yet; it is not treated as complete merely because an adapter or c
 | CLI setup/lifecycle/status/doctor/bypass/uninstall/restore                                      | Implemented                                          | Focused command tests, managed-process test, and isolated global tarball installation                                                                                                                                                                     |
 | Real coding-agent clean-install routing                                                         | Implemented locally                                  | Claude Code 2.1.212 completes a streamed `Read` tool loop through the router                                                                                                                                                                              |
 | React operator console for providers/models/routing/sessions/spend/evaluations/failures/savings | Implemented                                          | Same-origin React build plus authenticated redacted metadata APIs and API tests                                                                                                                                                                           |
-| PostgreSQL configuration/routing/usage/evaluation persistence                                   | Implemented and locally proven                       | All nine migrations applied to disposable PostgreSQL 17; live router/evaluation data persisted and read back; a fresh-instance dump/restore drill authenticates the restored encrypted transcript and migration history                                   |
-| Repeatable evaluation and calibration platform                                                  | Implemented                                          | Versioned YAML suites, LangGraph tool agent, disposable workspaces, verifier, actual usage collection, output-limit comparability, deadline propagation, honest failure recording, JSONL and PostgreSQL persistence                                       |
+| PostgreSQL configuration/routing/usage/evaluation persistence                                   | Implemented and locally proven                       | All ten migrations applied to disposable PostgreSQL 17; live router/evaluation data persisted and read back; a fresh-instance dump/restore drill authenticates the restored encrypted transcript and migration history                                    |
+| Repeatable evaluation and calibration platform                                                  | Implemented                                          | Versioned YAML suites, LangGraph tool agent, post-agent hidden verifiers, SHA-256 dataset identity in JSONL/PostgreSQL, actual usage collection, deadline propagation, fair matrix reports, and honest failure recording                                  |
+| Substantial published coding corpus                                                             | Implemented and reference-verified                   | `public-coding-v1` has 20 independent tasks covering all 15 task classes; every original fixture fails and every separate reference solution passes its hidden verifier under the published integrity command                                             |
 | Balanced frontier quality with meaningful measured savings                                      | Unproven                                             | Requires real identical-task fixed-baseline and Balanced benchmark results across a substantial coding corpus                                                                                                                                             |
 | Eco additional savings with documented quality trade-off                                        | Unproven                                             | Requires the same real benchmark and an explicit accepted quality threshold                                                                                                                                                                               |
 | Costs from actual provider usage, including retries                                             | Implemented for gateway accounting                   | Provider-reported token usage drives the immutable retry-inclusive ledger; billing-export reconciliation still needs provider accounts                                                                                                                    |
@@ -32,7 +33,7 @@ does not exist yet; it is not treated as complete merely because an adapter or c
 
 - Formatting, strict type checking, build, lint, Prisma validation, and example configuration
   validation pass.
-- 49 test files and 250 tests pass.
+- 50 test files and 254 tests pass.
 - Full-tree and production-only `npm audit --audit-level=high` report zero vulnerabilities.
 - Load smoke: 400 requests, concurrency 40, 0 failures, 236.3 requests/second, 339.5 ms p95 on
   this machine.
@@ -47,8 +48,11 @@ does not exist yet; it is not treated as complete merely because an adapter or c
   the failed result, usage, model attribution, and retained workspace were persisted.
 - Disposable PostgreSQL 17 and the hardened production Compose stack apply all migrations, become
   healthy, persist a routed request, redact the gateway key in logs, and tear down cleanly. The
-  recovery drill restores all nine migrations, a Vartma session, and its authenticated encrypted
+  recovery drill restores all ten migrations, a Vartma session, and its authenticated encrypted
   canonical transcript into a fresh instance.
+- The public benchmark integrity gate passes 20 failing baselines and 20 passing references across
+  all 15 routing task classes. Matrix manifests bind results to the complete dataset SHA-256
+  identity rather than trusting a version label alone.
 - GitHub Actions run `32816599375` passes the full validation matrix on Ubuntu, macOS, and Windows,
   plus the PostgreSQL migration/diagnostics/endurance/recovery/container-build job.
 
@@ -56,6 +60,6 @@ does not exist yet; it is not treated as complete merely because an adapter or c
 
 The product cannot honestly be declared complete until operators provide usable provider keys and
 authorize the real benchmark spend, then the remaining named-provider conformance runs and the
-fixed/Balanced/Eco evaluation matrix succeed on a substantial corpus. Independent security review,
+fixed/Balanced/Eco evaluation matrix succeed on the checked-in substantial corpus. Independent security review,
 release signing, and provider billing-export reconciliation remain external production-release
 evidence, not claims that can be generated from source tests.

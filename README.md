@@ -251,6 +251,7 @@ npm run smoke:claude-code
 npm run smoke:load
 npm run smoke:soak
 npm run smoke:postgres-recovery
+npm run smoke:benchmark-corpus
 npm run smoke:clean-install
 npm audit --audit-level=high
 npm audit --omit=dev --audit-level=high
@@ -296,17 +297,20 @@ or encrypted transcripts are enabled.
   Git; back it up as sensitive encrypted data and supply the master key through your deployment
   secret manager.
 
-- Run the checked-in LangGraph coding-agent evaluation harness against fixed and routed targets:
+- Verify the checked-in 20-task hidden-verifier corpus, then run the same corpus against fixed and
+  routed targets in one reproducible matrix:
 
   ```sh
-  vartma eval run ./evals/suites/smoke.yaml --target fixed:<model-id> --output fixed.jsonl
-  vartma eval run ./evals/suites/smoke.yaml --target router:balanced --output balanced.jsonl
+  npm run smoke:benchmark-corpus
+  npm run eval:matrix -- --fixed <frontier-model-id> --fixed <lower-cost-model-id> --config ./vartma.yaml
   ```
 
   The harness operates on disposable fixture copies, restricts agent commands to the suite's
-  allowlist, runs verifier commands without a shell, and records actual retry-inclusive gateway
-  usage. Runs are also persisted transactionally in configured PostgreSQL unless `--no-persist` is
-  supplied. See [evaluation and calibration](./docs/evaluation-and-calibration.md).
+  allowlist, installs hidden verifier files only after the model finishes, fingerprints the suite,
+  fixtures, and verifiers, and records actual retry-inclusive gateway usage. The matrix produces
+  baseline-relative quality retention and cost-savings evidence. Runs are also persisted
+  transactionally in configured PostgreSQL unless `--no-persist` is supplied. See
+  [evaluation and calibration](./docs/evaluation-and-calibration.md).
 
 - Prompt content is not logged by default.
 - LangSmith export is disabled by default.

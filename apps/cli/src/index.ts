@@ -569,6 +569,7 @@ evaluation
       const runs = await runEvaluationSuite({
         suite: loadedSuite.suite,
         suiteDirectory: loadedSuite.directory,
+        datasetDigest: loadedSuite.digest,
         target,
         gatewayUrl:
           options.gatewayUrl ??
@@ -608,9 +609,10 @@ evaluation
   .command("summarize <results-path>")
   .description("Compare fixed-model and router JSONL results with fairness checks.")
   .option("--json", "Print machine-readable JSON")
-  .action(async (resultsPath: string, options: { json?: boolean }) => {
+  .option("--baseline <target>", "Baseline target key, for example fixed:anthropic/claude-sonnet")
+  .action(async (resultsPath: string, options: { json?: boolean; baseline?: string }) => {
     const results = parseEvaluationJsonLines(await readFile(resolve(resultsPath), "utf8"));
-    const report = summarizeEvaluation(results);
+    const report = summarizeEvaluation(results, options.baseline);
     process.stdout.write(
       options.json ? `${JSON.stringify(report, null, 2)}\n` : formatEvaluationReport(report),
     );
@@ -1009,7 +1011,26 @@ function formatEvaluationReport(report: EvaluationReport): string {
     );
     lines.push(`  distribution=${JSON.stringify(target.routingDistribution)}`);
   }
+  for (const comparison of report.comparisons) {
+    lines.push(
+      `${comparison.target} vs ${comparison.baseline} ` +
+        `quality-retention=${formatRatio(comparison.qualityRetention)} ` +
+        `pass-delta=${formatSignedPercent(comparison.passRateDelta)} ` +
+        `cost-savings=${formatRatio(comparison.costSavingsRate)} ` +
+        `cost/solved-savings=${formatRatio(comparison.costPerSolvedSavingsRate)} ` +
+        `cost-delta=$${comparison.actualCostDeltaUsd}`,
+    );
+  }
   return `${lines.join("\n")}\n`;
+}
+
+function formatRatio(value: number | null): string {
+  return value === null ? "n/a" : `${(value * 100).toFixed(1)}%`;
+}
+
+function formatSignedPercent(value: number): string {
+  const percent = value * 100;
+  return `${percent >= 0 ? "+" : ""}${percent.toFixed(1)}pp`;
 }
 
 function diagnosticReport(checks: DoctorReport["checks"]): DoctorReport {
